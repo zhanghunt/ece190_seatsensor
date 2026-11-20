@@ -1,0 +1,7 @@
+build/
+.pio/
+*.hex
+*.elf
+*.bin
+~$*
+desktop.ini
