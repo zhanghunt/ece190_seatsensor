@@ -1,0 +1,1965 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Seat Sensor - UI simulator</title>
+<style>
+  :root { --bg:#14161d; --panel:#1d2029; --line:#2c3040; --fg:#e8eaf2; --sub:#9aa1b5; --accent:#8fc8ff; --warn:#ffb98a; --bad:#ff8a80; --ok:#9ce6b0; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:13px/1.4 system-ui, -apple-system, Segoe UI, sans-serif; }
+  header { padding:12px 20px; border-bottom:1px solid var(--line); display:flex; gap:16px; align-items:baseline; flex-wrap:wrap; }
+  header h1 { font-size:16px; margin:0; }
+  header span { color:var(--sub); }
+  main { display:grid; grid-template-columns: 430px minmax(320px, 1fr) minmax(300px, 1fr); gap:16px; padding:16px 20px; align-items:start; }
+  @media (max-width: 1200px) { main { grid-template-columns: 430px 1fr; } }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px 14px; margin-bottom:14px; }
+  .panel h2 { font-size:12px; text-transform:uppercase; letter-spacing:.06em; color:var(--sub); margin:0 0 10px; font-weight:600; }
+  .device { display:flex; flex-direction:column; align-items:center; gap:14px; }
+  .bezel { background:#0b0c10; padding:14px; border-radius:12px; border:1px solid #333; position:relative; }
+  #tft { width:384px; height:480px; image-rendering:pixelated; display:block; cursor:crosshair; }
+  #coords { font:12px ui-monospace, Consolas, monospace; color:var(--sub); min-height:16px; }
+  .lcd { width:384px; padding:10px 14px; border-radius:6px; border:4px solid #222; font:22px/1.15 ui-monospace, Consolas, monospace; letter-spacing:2px; color:#15181f; white-space:pre; transition: background .15s; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:8px; }
+  button { background:#2a2f3d; color:var(--fg); border:1px solid #3a4052; border-radius:6px; padding:6px 10px; font:inherit; cursor:pointer; }
+  button:hover { background:#343a4b; }
+  button:active { background:#3d4559; }
+  button.primary { background:#2d4a6b; border-color:#3f6b98; }
+  button.on { background:#2f5b3e; border-color:#4b8a5f; }
+  #touchpad { width:384px; height:64px; font-size:15px; user-select:none; touch-action:none; }
+  #touchpad.down { background:#4a5a7a; }
+  select, input[type=text] { background:#111319; color:var(--fg); border:1px solid #3a4052; border-radius:6px; padding:5px 8px; font:inherit; }
+  label { color:var(--sub); display:flex; align-items:center; gap:6px; }
+  .hint { color:var(--sub); font-size:12px; }
+  #serialOut { background:#0d0f14; border:1px solid var(--line); border-radius:6px; height:200px; overflow:auto; font:12px/1.35 ui-monospace, Consolas, monospace; padding:6px 8px; white-space:pre-wrap; word-break:break-all; }
+  #inspector { width:100%; border-collapse:collapse; font:12px ui-monospace, Consolas, monospace; }
+  #inspector td { padding:2px 6px; border-bottom:1px solid #262a36; vertical-align:top; }
+  #inspector td:first-child { color:var(--sub); white-space:nowrap; }
+  .pill { display:inline-block; padding:1px 8px; border-radius:10px; font-size:12px; background:#2a2f3d; }
+  #buzz { width:14px; height:14px; border-radius:50%; background:#333; display:inline-block; vertical-align:middle; }
+  #buzz.on { background:#ffd36b; box-shadow:0 0 10px #ffd36b; }
+  kbd { background:#2a2f3d; border:1px solid #3a4052; border-radius:4px; padding:0 5px; font-size:11px; }
+  #warnings div { color:var(--warn); font:12px ui-monospace, Consolas, monospace; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Wheelchair Seat Sensor — UI simulator</h1>
+  <span>A line-by-line port of <code>seat_sensor/seat_sensor.ino</code> running on emulated hardware (ST7735 128×160, Grove LCD, DS3231, EEPROM, 32-bit millis()).</span>
+</header>
+<main>
+  <!-- ============ DEVICE ============ -->
+  <section class="device">
+    <div class="bezel"><canvas id="tft" width="128" height="160"></canvas></div>
+    <div id="coords">hover the screen for pixel coordinates</div>
+    <button id="touchpad" title="Grove touch sensor on D2">Touch sensor (press and hold)   <kbd>Space</kbd></button>
+    <div class="lcd" id="lcd"></div>
+    <div class="hint">Buzzer <span id="buzz"></span> &nbsp; Seat mat: <span class="pill" id="seatPill">empty</span> &nbsp; App: <span class="pill" id="appPill">-</span></div>
+  </section>
+
+  <!-- ============ CONTROLS ============ -->
+  <section>
+    <div class="panel">
+      <h2>Simulation</h2>
+      <div class="row">
+        <label>Speed <select id="speed">
+          <option value="1" selected>1× (real time)</option><option value="5">5×</option><option value="20">20×</option>
+          <option value="60">60×</option><option value="300">300×</option></select></label>
+        <button id="pauseBtn">Pause</button>
+        <button id="stepBtn" title="Run one loop() of 20 ms while paused">Step 20 ms</button>
+      </div>
+      <div class="row">Skip ahead:
+        <button data-jump="10000">+10 s</button><button data-jump="60000">+1 min</button>
+        <button data-jump="600000">+10 min</button><button data-jump="3600000">+1 h</button><button data-jump="21600000">+6 h</button>
+        <span id="jumpInfo" class="hint"></span>
+      </div>
+      <div class="row">
+        <label><input type="checkbox" id="flash"> Flash redrawn pixels</label>
+        <label><input type="checkbox" id="sound"> Buzzer sound</label>
+      </div>
+      <div class="hint">Skipping runs loop() every 20 ms of sim time, so everything (beeps, slots, rollover) still happens in order. With speed above 1×, mouse presses on the touch sensor get longer by the same factor; use the gesture buttons below for exact timings.</div>
+    </div>
+
+    <div class="panel">
+      <h2>Touch sensor gestures (exact sim time)</h2>
+      <div class="row">
+        <button data-touch="40" title="< 50 ms: ignored as a glitch">Glitch 40 ms</button>
+        <button data-touch="100" title="< 150 ms: ignored on the locked main screen">Brush 100 ms</button>
+        <button data-touch="250" class="primary">Tap 250 ms <kbd>T</kbd></button>
+        <button data-touch="900" class="primary">Hold 0.9 s <kbd>H</kbd></button>
+      </div>
+      <div class="row">
+        <button data-touch="1700" title="Set clock: -1 (undo)">Long hold 1.7 s</button>
+        <button data-touch="2500" title="Exercise page: hidden game">Secret hold 2.5 s</button>
+        <button data-touch="4500" title="> 4 s: arm resting, cancelled">Resting arm 4.5 s</button>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Seat mat (D7, LOW = pressed)</h2>
+      <div class="row">
+        <button id="seatToggle" class="primary">Sit down <kbd>S</kbd></button>
+        <button data-seat="standup" title="Seat empty for 3 s, then sit again">Stand up 3 s</button>
+        <button data-seat="bounce" title="Empty for 250 ms - should NOT count">Bounce 250 ms</button>
+        <button data-seat="shift" title="Pressed for 300 ms while out - should NOT count as a sit">Brush seat 300 ms</button>
+      </div>
+      <div class="row">
+        <button data-seat="reps5" title="5 stands for the sit-to-stand test (0.8 s up, 0.7 s down)">5 quick reps</button>
+        <button data-seat="reps5fast" title="5 stands at 0.45 s up / 0.45 s down (near the 350 ms test filter)">5 very fast reps</button>
+        <button data-seat="longsit" title="Sit, then skip ahead 31 min">Sit + skip 31 min</button>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Power, clock and memory</h2>
+      <div class="row">
+        <button id="powerCycle">Power cycle</button>
+        <button id="reupload" title="New __DATE__/__TIME__ and build id; EEPROM is kept">Re-upload sketch</button>
+        <button id="wipe" title="All 8 KB back to 0xFF">Wipe EEPROM</button>
+      </div>
+      <div class="row">
+        <label><input type="checkbox" id="coinCell"> DS3231 has a coin cell</label>
+        <label><input type="checkbox" id="rtcPresent" checked> DS3231 connected</label>
+      </div>
+      <div class="row">
+        <label><input type="checkbox" id="nearWrap"> Next boot: millis() starts 2 min before its 49.7-day rollover</label>
+      </div>
+      <div class="hint">Power cycle restarts setup() with millis() at 0. Without a coin cell the DS3231 resets to 2000-01-01 and reports lostPower(). Unplugging the clock makes rtc.now() return all-0xFF garbage, the way a failed I²C read does.</div>
+    </div>
+
+    <div class="panel">
+      <h2>Serial Monitor (115200, Newline)</h2>
+      <div id="serialOut"></div>
+      <div class="row" style="margin-top:8px">
+        <input type="text" id="serialIn" placeholder="2026-11-08 13:45:00" style="flex:1">
+        <button id="serialSend">Send</button>
+        <button id="serialNow" title="Fill in the computer's current time">Now</button>
+        <button id="serialClear">Clear</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ INSPECTOR ============ -->
+  <section>
+    <div class="panel">
+      <h2>Sketch state (live)</h2>
+      <table id="inspector"></table>
+    </div>
+    <div class="panel">
+      <h2>Draw warnings</h2>
+      <div class="hint" style="margin-bottom:6px">Text that the Adafruit library wraps to a new line, or that is drawn partly off-screen. Each is listed once.</div>
+      <div id="warnings"></div>
+      <div class="row" style="margin-top:8px"><button id="clearWarn">Clear</button></div>
+    </div>
+  </section>
+</main>
+
+<script>
+"use strict";
+// =====================================================================
+// 32-BIT C ARITHMETIC
+// =====================================================================
+const U = x => x >>> 0;                    // unsigned long
+const S32 = x => x | 0;                    // (long) cast
+const idiv = (a, b) => Math.trunc(a / b);  // C integer division
+const pad2 = n => (n < 10 ? "0" : "") + n;
+
+// printf subset: flags - 0, width (number or *), .precision for %s, d u lu s c
+function sprintf(fmt, ...args) {
+  let ai = 0;
+  return fmt.replace(/%([-0 +]*)(\*|\d+)?(?:\.(\d+))?(l?)([dusc%])/g, (m, flags, width, prec, l, conv) => {
+    if (conv === "%") return "%";
+    let left = flags.includes("-"), zero = flags.includes("0"), w = 0;
+    if (width === "*") { w = args[ai++] | 0; if (w < 0) { left = true; w = -w; } }
+    else if (width) w = +width;
+    const v = args[ai++];
+    let s;
+    if (conv === "s") { s = String(v); if (prec !== undefined) s = s.slice(0, +prec); zero = false; }
+    else if (conv === "c") { s = typeof v === "number" ? String.fromCharCode(v) : String(v); zero = false; }
+    else {
+      let n = Math.trunc(Number(v));
+      n = conv === "u" ? n >>> 0 : n | 0;
+      const neg = n < 0;
+      let digits = String(Math.abs(n));
+      if (zero && !left) while (digits.length < w - (neg ? 1 : 0)) digits = "0" + digits;
+      s = (neg ? "-" : "") + digits;
+    }
+    if (s.length < w) s = left ? s + " ".repeat(w - s.length) : " ".repeat(w - s.length) + s;
+    return s;
+  });
+}
+// snprintf(buf, len, ...): the result is cut to len - 1 characters
+const snprintf = (len, fmt, ...a) => sprintf(fmt, ...a).slice(0, len - 1);
+
+// =====================================================================
+// SIMULATED TIME
+// =====================================================================
+let simAbs = 0;            // ms since the page opened; never resets (drives the DS3231)
+let bootAbs = 0;           // simAbs at the last power-up
+let millisStart = 0;       // millis() value at power-up (0, or near the rollover)
+const millis = () => U(simAbs - bootAbs + millisStart);
+
+// =====================================================================
+// ST7735 + ADAFRUIT GFX (pixel-exact primitives, classic 5x7 font)
+// =====================================================================
+const TW = 128, TH = 160;
+const fb = new Uint16Array(TW * TH);
+const drawnAt = new Float64Array(TW * TH);
+let fbDirty = true;
+const warnings = new Map();
+function warn(msg) { if (!warnings.has(msg)) { warnings.set(msg, true); renderWarnings(); } }
+
+const FONT_HEX =
+  "0000000000" + "00005F0000" + "0007000700" + "147F147F14" + "242A7F2A12" + "2313086462" + "3649562050" + "0008070300" +
+  "001C224100" + "0041221C00" + "2A1C7F1C2A" + "08083E0808" + "0080703000" + "0808080808" + "0000606000" + "2010080402" +
+  "3E5149453E" + "00427F4000" + "7249494946" + "2141494D33" + "1814127F10" + "2745454539" + "3C4A494931" + "4121110907" +
+  "3649494936" + "464949291E" + "0000140000" + "0040340000" + "0008142241" + "1414141414" + "0041221408" + "0201590906" +
+  "3E415D594E" + "7C1211127C" + "7F49494936" + "3E41414122" + "7F4141413E" + "7F49494941" + "7F09090901" + "3E41415173" +
+  "7F0808087F" + "00417F4100" + "2040413F01" + "7F08142241" + "7F40404040" + "7F021C027F" + "7F0408107F" + "3E4141413E" +
+  "7F09090906" + "3E4151215E" + "7F09192946" + "2649494932" + "03017F0103" + "3F4040403F" + "1F2040201F" + "3F4038403F" +
+  "6314081463" + "0304780403" + "6159494D43" + "007F414141" + "0204081020" + "004141417F" + "0402010204" + "4040404040" +
+  "0003070800" + "2054547840" + "7F28444438" + "3844444428" + "384444287F" + "3854545418" + "00087E0902" + "18A4A49C78" +
+  "7F08040478" + "00447D4000" + "2040403D00" + "7F10284400" + "00417F4000" + "7C04780478" + "7C08040478" + "3844444438" +
+  "FC18242418" + "18242418FC" + "7C08040408" + "4854545424" + "04043F4424" + "3C4040207C" + "1C2040201C" + "3C4030403C" +
+  "4428102844" + "4C9090907C" + "4464544C44" + "0008364100" + "0000770000" + "0041360800" + "0201020402";
+const FONT = [];
+for (let i = 0; i < FONT_HEX.length; i += 2) FONT.push(parseInt(FONT_HEX.substr(i, 2), 16));
+
+const tft = {
+  size: 1, fg: 0xFFFF, bg: 0xFFFF, cx: 0, cy: 0, wrap: true,
+  px(x, y, c) {
+    if (x < 0 || y < 0 || x >= TW || y >= TH) return;
+    const i = y * TW + x; fb[i] = c; drawnAt[i] = performance.now(); fbDirty = true;
+  },
+  // Adafruit_SPITFT::fillRect: negative sizes are flipped, then clipped
+  fillRect(x, y, w, h, c) {
+    if (!w || !h) return;
+    if (w < 0) { x += w + 1; w = -w; }
+    if (h < 0) { y += h + 1; h = -h; }
+    let x2 = x + w - 1, y2 = y + h - 1;
+    if (x2 < 0 || y2 < 0 || x >= TW || y >= TH) return;
+    if (x < 0) x = 0; if (y < 0) y = 0; if (x2 >= TW) x2 = TW - 1; if (y2 >= TH) y2 = TH - 1;
+    const t = performance.now();
+    for (let yy = y; yy <= y2; yy++) for (let xx = x; xx <= x2; xx++) { const i = yy * TW + xx; fb[i] = c; drawnAt[i] = t; }
+    fbDirty = true;
+  },
+  fillScreen(c) { this.fillRect(0, 0, TW, TH, c); },
+  drawFastHLine(x, y, w, c) { this.fillRect(x, y, w, 1, c); },
+  drawFastVLine(x, y, h, c) { this.fillRect(x, y, 1, h, c); },
+  drawPixel(x, y, c) { this.px(x, y, c); },
+  drawLine(x0, y0, x1, y1, c) {
+    const steep = Math.abs(y1 - y0) > Math.abs(x1 - x0);
+    if (steep) { [x0, y0] = [y0, x0]; [x1, y1] = [y1, x1]; }
+    if (x0 > x1) { [x0, x1] = [x1, x0]; [y0, y1] = [y1, y0]; }
+    const dx = x1 - x0, dy = Math.abs(y1 - y0), ystep = y0 < y1 ? 1 : -1;
+    let err = idiv(dx, 2);
+    for (; x0 <= x1; x0++) {
+      if (steep) this.px(y0, x0, c); else this.px(x0, y0, c);
+      err -= dy;
+      if (err < 0) { y0 += ystep; err += dx; }
+    }
+  },
+  fillCircleHelper(x0, y0, r, corners, delta, c) {
+    let f = 1 - r, ddFx = 1, ddFy = -2 * r, x = 0, y = r, px = x, py = y;
+    delta++;
+    while (x < y) {
+      if (f >= 0) { y--; ddFy += 2; f += ddFy; }
+      x++; ddFx += 2; f += ddFx;
+      if (x < y + 1) {
+        if (corners & 1) this.drawFastVLine(x0 + x, y0 - y, 2 * y + delta, c);
+        if (corners & 2) this.drawFastVLine(x0 - x, y0 - y, 2 * y + delta, c);
+      }
+      if (y !== py) {
+        if (corners & 1) this.drawFastVLine(x0 + py, y0 - px, 2 * px + delta, c);
+        if (corners & 2) this.drawFastVLine(x0 - py, y0 - px, 2 * px + delta, c);
+        py = y;
+      }
+      px = x;
+    }
+  },
+  fillCircle(x0, y0, r, c) { this.drawFastVLine(x0, y0 - r, 2 * r + 1, c); this.fillCircleHelper(x0, y0, r, 3, 0, c); },
+  fillRoundRect(x, y, w, h, r, c) {
+    const max = idiv(w < h ? w : h, 2);
+    if (r > max) r = max;
+    this.fillRect(x + r, y, w - 2 * r, h, c);
+    this.fillCircleHelper(x + w - r - 1, y + r, r, 1, h - 2 * r - 1, c);
+    this.fillCircleHelper(x + r, y + r, r, 2, h - 2 * r - 1, c);
+  },
+  setTextSize(s) { this.size = s; },
+  setTextColor(c, bg) { this.fg = c; this.bg = bg === undefined ? c : bg; },
+  setCursor(x, y) { this.cx = x; this.cy = y; },
+  drawChar(x, y, ch, color, bg, size) {
+    if (x >= TW || y >= TH || x + 6 * size - 1 < 0 || y + 8 * size - 1 < 0) return;
+    const code = ch.charCodeAt(0), base = (code - 32) * 5;
+    for (let i = 0; i < 5; i++) {
+      let line = code >= 32 && code < 127 ? FONT[base + i] : 0;
+      for (let j = 0; j < 8; j++, line >>= 1) {
+        if (line & 1) { if (size === 1) this.px(x + i, y + j, color); else this.fillRect(x + i * size, y + j * size, size, size, color); }
+        else if (bg !== color) { if (size === 1) this.px(x + i, y + j, bg); else this.fillRect(x + i * size, y + j * size, size, size, bg); }
+      }
+    }
+    if (bg !== color) { if (size === 1) this.drawFastVLine(x + 5, y, 8, bg); else this.fillRect(x + 5 * size, y, size, 8 * size, bg); }
+  },
+  print(s) {
+    s = String(s);
+    const x0 = this.cx, y0 = this.cy;
+    let wrapped = false;
+    for (const ch of s) {
+      if (ch === "\n") { this.cx = 0; this.cy += this.size * 8; continue; }
+      if (ch === "\r") continue;
+      if (this.wrap && this.cx + this.size * 6 > TW) { this.cx = 0; this.cy += this.size * 8; wrapped = true; }
+      this.drawChar(this.cx, this.cy, ch, this.fg, this.bg, this.size);
+      this.cx += this.size * 6;
+    }
+    const app = currentSketch ? currentSketch.appName() : "?";
+    if (wrapped) warn(`[${app}] "${s}" at (${x0},${y0}) size ${this.size} wrapped onto the next line (${s.length * 6 * this.size + x0} px > 128)`);
+    else if (x0 < 0) warn(`[${app}] "${s}" at (${x0},${y0}) size ${this.size} starts off the left edge`);
+  },
+  // Commands the sketch sends that change nothing visible here
+  initR() {}, setSPISpeed() {}, setRotation() {}, sendCommand() {},
+};
+
+// =====================================================================
+// GROVE LCD RGB (16x2)
+// =====================================================================
+const lcd = {
+  rows: [" ".repeat(16), " ".repeat(16)], col: 0, row: 0, rgb: [0, 0, 0],
+  begin() { this.rows = [" ".repeat(16), " ".repeat(16)]; this.col = 0; this.row = 0; },
+  setRGB(r, g, b) { this.rgb = [r, g, b]; },
+  setCursor(c, r) { this.col = c; this.row = r; },
+  print(s) {
+    for (const ch of String(s)) {
+      if (this.col < 16) { const r = this.rows[this.row]; this.rows[this.row] = r.slice(0, this.col) + ch + r.slice(this.col + 1); }
+      this.col++;
+    }
+  },
+};
+
+// =====================================================================
+// DS3231 + RTClib DateTime
+// =====================================================================
+const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+function dim(y, m) { return [31, (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0 ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][m - 1]; }
+class DateTime {
+  constructor(y = 2000, mo = 1, d = 1, h = 0, mi = 0, s = 0) {
+    this.yOff = (y >= 2000 ? y - 2000 : y) & 0xFF;      // RTClib stores the year as uint8 offset from 2000
+    this.m = mo & 0xFF; this.d = d & 0xFF; this.hh = h & 0xFF; this.mm = mi & 0xFF; this.ss = s & 0xFF;
+  }
+  static fromEpoch(sec) { const t = new Date(sec * 1000); return new DateTime(t.getUTCFullYear(), t.getUTCMonth() + 1, t.getUTCDate(), t.getUTCHours(), t.getUTCMinutes(), t.getUTCSeconds()); }
+  // DateTime(__DATE__, __TIME__): "Nov  8 2026", "13:45:00"
+  static fromStrings(date, time) {
+    const mo = MONTHS.indexOf(date.slice(0, 3)) + 1;
+    return new DateTime(2000 + +date.slice(9, 11), mo, +date.slice(4, 6).trim(), +time.slice(0, 2), +time.slice(3, 5), +time.slice(6, 8));
+  }
+  year() { return 2000 + this.yOff; } month() { return this.m; } day() { return this.d; }
+  hour() { return this.hh; } minute() { return this.mm; } second() { return this.ss; }
+  epoch() { return Date.UTC(this.year(), this.m - 1, this.d, this.hh, this.mm, this.ss) / 1000; }
+  plus(sec) { return DateTime.fromEpoch(this.epoch() + sec); }      // + TimeSpan(sec)
+  valid() { return this.yOff <= 99 && this.m >= 1 && this.m <= 12 && this.d >= 1 && this.d <= dim(this.year(), this.m) && this.hh < 24 && this.mm < 60 && this.ss < 60; }
+  toString() { return `${this.year()}-${pad2(this.m)}-${pad2(this.d)} ${pad2(this.hh)}:${pad2(this.mm)}:${pad2(this.ss)}`; }
+}
+const rtcHw = {
+  present: true, coinCell: false, lostPowerFlag: true,
+  base: { epoch: new DateTime(2000, 1, 1).epoch(), at: 0 },     // or { garbage: DateTime }
+  powerLoss() { if (!this.coinCell) { this.base = { epoch: new DateTime(2000, 1, 1).epoch(), at: simAbs }; this.lostPowerFlag = true; } },
+};
+const rtc = {
+  begin() { return rtcHw.present; },
+  now() {
+    if (!rtcHw.present) { const g = new DateTime(); g.yOff = 165; g.m = 165; g.d = 165; g.hh = 165; g.mm = 165; g.ss = 85; return g; }
+    if (rtcHw.base.garbage) return rtcHw.base.garbage;
+    return DateTime.fromEpoch(rtcHw.base.epoch + Math.floor((simAbs - rtcHw.base.at) / 1000));
+  },
+  adjust(dt) {
+    if (!rtcHw.present) return;
+    rtcHw.lostPowerFlag = false;
+    rtcHw.base = dt.valid() ? { epoch: dt.epoch(), at: simAbs } : { garbage: dt };
+  },
+  lostPower() { return rtcHw.present ? rtcHw.lostPowerFlag : true; },
+};
+
+// =====================================================================
+// EEPROM (8 KB, erased = 0xFF) with the sketch's struct layouts
+// =====================================================================
+const EE = new Uint8Array(8192).fill(0xFF);
+const dv = new DataView(EE.buffer);
+let eeWrites = 0;
+function eeBytes(addr, bytes) {      // EEPROM.put only writes bytes that changed
+  for (let i = 0; i < bytes.length; i++) if (EE[addr + i] !== bytes[i]) { EE[addr + i] = bytes[i]; eeWrites++; }
+}
+function buf(n) { const b = new Uint8Array(n); return [b, new DataView(b.buffer)]; }
+const EEPROM = {
+  putU32(addr, v) { const [b, d] = buf(4); d.setUint32(0, v >>> 0, true); eeBytes(addr, b); },
+  // Settings: 68 bytes
+  putSettings(a, s) {
+    const [b, d] = buf(68);
+    d.setUint32(0, s.magic >>> 0, true); b[4] = s.goalIndex; b[5] = s.remindIndex; b[6] = s.soundOn; b[7] = s.testCount;
+    d.setUint16(8, s.testNumber, true); b[10] = s.dayCount; b[11] = s.dayHead; d.setUint32(12, s.buildId >>> 0, true);
+    d.setUint16(16, s.gameBest, true); d.setUint16(18, s.reserved, true);
+    for (let i = 0; i < 12; i++) { d.setUint16(20 + i * 4, s.tests[i].n, true); d.setUint16(22 + i * 4, s.tests[i].ds, true); }
+    eeBytes(a, b);
+  },
+  getSettings(a) {
+    const s = { magic: dv.getUint32(a, true), goalIndex: EE[a + 4], remindIndex: EE[a + 5], soundOn: EE[a + 6], testCount: EE[a + 7],
+      testNumber: dv.getUint16(a + 8, true), dayCount: EE[a + 10], dayHead: EE[a + 11], buildId: dv.getUint32(a + 12, true),
+      gameBest: dv.getUint16(a + 16, true), reserved: dv.getUint16(a + 18, true), tests: [] };
+    for (let i = 0; i < 12; i++) s.tests.push({ n: dv.getUint16(a + 20 + i * 4, true), ds: dv.getUint16(a + 22 + i * 4, true) });
+    return s;
+  },
+  // DayRecord: 42 bytes
+  putDay(a, r) {
+    const [b, d] = buf(42);
+    d.setUint16(0, r.seatedMin, true); d.setUint16(2, r.outMin, true); d.setUint16(4, r.longestMin, true); d.setUint16(6, r.reps, true);
+    b[8] = r.remAns; b[9] = r.remTot; d.setUint16(10, r.bestTestDs, true);
+    for (let i = 0; i < 30; i++) b[12 + i] = r.slots[i];
+    eeBytes(a, b);
+  },
+  getDay(a) {
+    return { seatedMin: dv.getUint16(a, true), outMin: dv.getUint16(a + 2, true), longestMin: dv.getUint16(a + 4, true), reps: dv.getUint16(a + 6, true),
+      remAns: EE[a + 8], remTot: EE[a + 9], bestTestDs: dv.getUint16(a + 10, true), slots: Array.from(EE.slice(a + 12, a + 42)) };
+  },
+  // Checkpoint: 62 bytes of fields, sizeof = 64 with padding
+  putCheckpoint(a, c) {
+    const [b, d] = buf(64);
+    d.setUint32(0, c.magic >>> 0, true); d.setUint32(4, c.date >>> 0, true); d.setUint32(8, c.elapsedMs >>> 0, true);
+    d.setUint32(12, c.seatedMs >>> 0, true); d.setUint32(16, c.outMs >>> 0, true); d.setUint32(20, c.longestMs >>> 0, true);
+    d.setUint32(24, c.bestTestMs >>> 0, true); d.setUint16(28, c.reps, true); b[30] = c.remAns; b[31] = c.remTot;
+    for (let i = 0; i < 30; i++) b[32 + i] = c.slots[i];
+    eeBytes(a, b);
+  },
+  getCheckpoint(a) {
+    return { magic: dv.getUint32(a, true), date: dv.getUint32(a + 4, true), elapsedMs: dv.getUint32(a + 8, true), seatedMs: dv.getUint32(a + 12, true),
+      outMs: dv.getUint32(a + 16, true), longestMs: dv.getUint32(a + 20, true), bestTestMs: dv.getUint32(a + 24, true),
+      reps: dv.getUint16(a + 28, true), remAns: EE[a + 30], remTot: EE[a + 31], slots: Array.from(EE.slice(a + 32, a + 62)) };
+  },
+};
+
+// =====================================================================
+// SERIAL, PINS, BUZZER
+// =====================================================================
+const serialIn = [];
+let serialText = "", serialDirty = false;
+const Serial = {
+  begin() {},
+  print(x) { serialText += String(x); if (serialText.length > 60000) serialText = serialText.slice(-50000); serialDirty = true; },
+  println(x = "") { this.print(String(x) + "\n"); },
+  available() { return serialIn.length; },
+  read() { return serialIn.shift(); },
+};
+const input = { touch: false, seat: false };
+let buzzerHigh = false;
+const hw = {
+  digitalRead(pin) {
+    if (pin === 2) return input.touch ? 1 : 0;          // touch sensor: HIGH = touched
+    if (pin === 7) return input.seat ? 0 : 1;           // seat mat with pull-up: LOW = pressed
+    return 0;
+  },
+  digitalWrite(pin, v) { if (pin === 3) { buzzerHigh = !!v; audioSet(buzzerHigh); } },
+};
+
+// =====================================================================
+// THE SKETCH (seat_sensor.ino ported function by function, same names)
+// =====================================================================
+let compileDate = "", compileTime = "";
+function setCompileTimeToNow() {
+  const t = new Date(Date.now() - 15000);               // compiled ~15 s before it starts running
+  compileDate = `${MONTHS[t.getMonth()]} ${String(t.getDate()).padStart(2, " ")} ${t.getFullYear()}`;
+  compileTime = `${pad2(t.getHours())}:${pad2(t.getMinutes())}:${pad2(t.getSeconds())}`;
+}
+
+function createSketch() {
+const random = n => Math.floor(Math.random() * n);
+const digitalRead = hw.digitalRead, digitalWrite = hw.digitalWrite;
+const __DATE__ = compileDate, __TIME__ = compileTime;
+const PI = Math.PI, LOW = 0, HIGH = 1;
+
+// PINS
+const TOUCH_PIN = 2, BUZZER_PIN = 3, SEAT_PIN = 7;
+
+// COLOURS (RGB565)
+const COL_BG = 0x1905, COL_CARD = 0x2988, COL_BAND = 0x31EA, COL_FAINT = 0x4A8C, COL_SUB = 0xA537, COL_FG = 0xF79F;
+const COL_MINT = 0x9F37, COL_SKY = 0x965F, COL_LAVENDER = 0xCDBF, COL_BUTTER = 0xFF31, COL_PEACH = 0xFDF1, COL_CORAL = 0xFC71;
+const COL_MINT_DIM = 0x42EB, COL_SKY_DIM = 0x428D, COL_LAV_DIM = 0x526D, COL_BUTTER_DIM = 0x62E9;
+
+// SETTINGS AND TIMING
+const GOAL_OPTIONS = [5, 10, 15, 20, 25, 30];
+const REMIND_OPTIONS_S = [30, 900, 1800, 2700, 3600];
+const NUM_GOALS = 6, NUM_REMINDS = 5;
+const READ_INTERVAL_MS = 20;
+const STAND_CONFIRM_MS = 600, SIT_CONFIRM_MS = 400, TEST_CONFIRM_MS = 350, MIN_BEEP_GAP_MS = 10000;
+const NEW_DAY_GAP_MS = 6 * 3600000, CHECKPOINT_MS = 10 * 60000, BOOT_CHOICE_MS = 5000, ANSWER_WINDOW_MS = 5 * 60000;
+const DAY_START_HOUR = 6, UPLOAD_SECONDS = 15;
+const SLOT_MS = 8 * 60000, SLOTS = 120, SLOT_MIN = 8, SLOT_BYTES = 30, LONG_SIT_SLOTS = 6, BASELINE_DAYS = 14;
+const GLITCH_MS = 50, LOCKED_TAP_MS = 150, HOLD_MS = 600, HOLD_BAR_DELAY_MS = 100, RESTING_MS = 4000;
+const LONG_HOLD_MS = 1500, SECRET_HOLD_MS = 2000, GAME_BAR_DELAY_MS = 300, HOLD_LABEL_MS = 300, IDLE_MS = 30000;
+const MAX_TESTS = 12, MAX_DAYS = 90;
+
+const APP_GLANCE = 0, APP_PATTERN = 1, APP_WEEK = 2, APP_TRENDS = 3, APP_EXERCISE = 4, APP_MENU = 5,
+      APP_TEST_RUN = 6, APP_CHECK = 7, APP_BOOT = 8, APP_SETCLOCK = 9, APP_GAME = 10;
+const APP_NAMES = ["Glance", "Pattern", "Week", "Trends", "Exercise", "Menu", "TestRun", "Check", "Boot", "SetClock", "Game"];
+const CAROUSEL = [APP_GLANCE, APP_PATTERN, APP_WEEK, APP_TRENDS, APP_EXERCISE];
+const NUM_CAROUSEL = 5;
+
+const DAY_SIZE = 42;
+const SETTINGS_MAGIC = 0x5EA70201, CP_MAGIC = 0xC0FFEE03;
+const SETTINGS_ADDR = 0, CP_ADDR = 128, DAYS_ADDR = 256;
+
+let settings = null;
+
+// RUNTIME STATE
+let seated = false, seatRaw = false, rawSinceReal = 0, rawSinceData = 0, satToday = false;
+let lastRead = 0, stateSince = 0, seatedTotalMs = 0, outTotalMs = 0, longestSitMs = 0;
+let reps = 0, goalReached = false, reminderDue = false, reminderAt = 0, lastRemindBeep = 0;
+let remindsThisSit = 0, remindersTotal = 0, remindersAnswered = 0, todayBestTestMs = 0, lastCheckpoint = 0;
+let currentApp = APP_GLANCE, menuReturnApp = APP_GLANCE, locked = true;
+let touchDown = false, touchCancelled = false, touchStart = 0, lastInput = 0, hintUntil = 0;
+
+const FAST_SPEEDS = [1, 20, 60], NUM_FAST = 3;
+let fastIndex = 0, timeScale = 1, dataBase = 0, realAnchor = 0;
+
+const todaySlots = new Array(SLOTS).fill(0);
+let slotIdx = 0, slotSamples = 0, slotSeatedSamples = 0, dayStart = 0, todayOffsetMs = 0;
+
+let rtcFound = false, clockOk = false, clockNow = new DateTime(), todayDate = 0, lastClockRead = 0;
+
+const baseP25 = new Array(SLOTS).fill(0), baseP50 = new Array(SLOTS).fill(0), baseP75 = new Array(SLOTS).fill(0);
+let haveBaseline = false;
+
+const LV_LEARNING = 0, LV_EARLY = 1, LV_MORE = 2, LV_USUAL = 3, LV_LESS = 4, LV_MUCHLESS = 5;
+const LEVELS = [
+  { label: "Learning usual",    lcdText: "LEARNING USUAL",   color: COL_SUB,   r: 120, g: 170, b: 255 },
+  { label: "Too early to tell", lcdText: "EARLY IN THE DAY", color: COL_SUB,   r: 120, g: 170, b: 255 },
+  { label: "More active",       lcdText: "MORE ACTIVE",      color: COL_MINT,  r: 130, g: 230, b: 170 },
+  { label: "About usual",       lcdText: "ABOUT USUAL",      color: COL_SKY,   r: 120, g: 170, b: 255 },
+  { label: "Less active",       lcdText: "LESS ACTIVE",      color: COL_PEACH, r: 255, g: 185, b: 120 },
+  { label: "Much less active",  lcdText: "MUCH LESS ACTIVE", color: COL_CORAL, r: 255, g: 125, b: 115 },
+];
+let statusDiffMin = 0;
+
+// SMALL HELPERS
+function dataMillis() { return U(dataBase + Math.imul(U(millis() - realAnchor), timeScale)); }
+function setTimeScale(scale) { dataBase = dataMillis(); realAnchor = millis(); timeScale = scale; }
+function currentGoal() { return GOAL_OPTIONS[settings.goalIndex]; }
+function remindIntervalMs() { return REMIND_OPTIONS_S[settings.remindIndex] * 1000; }
+function totalSeatedMs() { return U(seatedTotalMs + (seated ? U(dataMillis() - stateSince) : 0)); }
+function totalOutMs() { return U(outTotalMs + (seated || !satToday ? 0 : U(dataMillis() - stateSince))); }
+function longestSitNowMs() { const cur = seated ? U(dataMillis() - stateSince) : 0; return cur > longestSitMs ? cur : longestSitMs; }
+function todayHasData() { return reps > 0 || totalSeatedMs() > 60000; }
+function dayElapsedMs() { return U(U(dataMillis() - dayStart) + todayOffsetMs); }
+
+function fmtDur(ms, len) {
+  const s = Math.floor(ms / 1000);
+  if (s < 3600) return snprintf(len, "%lu:%02lu", Math.floor(s / 60), s % 60);
+  return snprintf(len, "%luh%02lum", Math.floor(s / 3600), Math.floor(s / 60) % 60);
+}
+function fmtHour(h) { h %= 24; return snprintf(6, "%d%s", h % 12 === 0 ? 12 : h % 12, h < 12 ? "am" : "pm"); }
+function fmtTenths(ms, len) { return snprintf(len, "%lu.%lu s", Math.floor(ms / 1000), Math.floor(ms / 100) % 10); }
+
+function getSlot(packed, k) { return (packed[k >> 2] >> ((k & 3) * 2)) & 3; }
+function packSlots(un) { const p = new Array(SLOT_BYTES).fill(0); for (let k = 0; k < SLOTS; k++) p[k >> 2] |= (un[k] & 3) << ((k & 3) * 2); return p; }
+function unpackSlots(packed, un) { for (let k = 0; k < SLOTS; k++) un[k] = getSlot(packed, k); }
+function sortU16(v, n) {
+  for (let i = 1; i < n; i++) { const x = v[i]; let j = i - 1; while (j >= 0 && v[j] > x) { v[j + 1] = v[j]; j--; } v[j + 1] = x; }
+}
+
+// EEPROM
+function saveSettings() { EEPROM.putSettings(SETTINGS_ADDR, settings); }
+function setDefaults() {
+  settings = { magic: SETTINGS_MAGIC, goalIndex: 3, remindIndex: 2, soundOn: 1, testCount: 0, testNumber: 0, dayCount: 0, dayHead: 0,
+    buildId: 0, gameBest: 0, reserved: 0, tests: Array.from({ length: MAX_TESTS }, () => ({ n: 0, ds: 0 })) };
+}
+function loadSettings() {
+  settings = EEPROM.getSettings(SETTINGS_ADDR);
+  const bad = settings.magic !== SETTINGS_MAGIC || settings.goalIndex >= NUM_GOALS || settings.remindIndex >= NUM_REMINDS ||
+              settings.testCount > MAX_TESTS || settings.dayCount > MAX_DAYS || settings.dayHead >= MAX_DAYS;
+  if (!bad && settings.gameBest > 9999) settings.gameBest = 0;
+  if (bad) { setDefaults(); saveSettings(); EEPROM.putU32(CP_ADDR, 0); }
+}
+function dayAddr(i) { return DAYS_ADDR + ((settings.dayHead + i) % MAX_DAYS) * DAY_SIZE; }
+function readDay(i) { return EEPROM.getDay(dayAddr(i)); }
+function pushDay(rec) {
+  if (settings.dayCount < MAX_DAYS) { EEPROM.putDay(dayAddr(settings.dayCount), rec); settings.dayCount++; }
+  else { EEPROM.putDay(dayAddr(0), rec); settings.dayHead = (settings.dayHead + 1) % MAX_DAYS; }
+  saveSettings();
+}
+function clearCheckpoint() { EEPROM.putU32(CP_ADDR, 0); }
+
+// BUZZER (non-blocking)
+let beepsLeft = 0, buzzerOn = false, beepOnMs = 80, beepOffMs = 120, nextBeepChange = 0;
+function beepPattern(count, onMs, offMs) {
+  if (!settings.soundOn) return;
+  beepsLeft = count; beepOnMs = onMs; beepOffMs = offMs; buzzerOn = false;
+  digitalWrite(BUZZER_PIN, LOW);
+  nextBeepChange = millis();
+}
+function serviceBuzzer() {
+  if (beepsLeft === 0 && !buzzerOn) return;
+  const now = millis();
+  if (S32(U(now - nextBeepChange)) < 0) return;
+  if (buzzerOn) { digitalWrite(BUZZER_PIN, LOW); buzzerOn = false; beepsLeft--; nextBeepChange = U(now + beepOffMs); }
+  else { digitalWrite(BUZZER_PIN, HIGH); buzzerOn = true; nextBeepChange = U(now + beepOnMs); }
+}
+
+// ACTIVITY VS USUAL
+function computeBaseline() {
+  const n = settings.dayCount < BASELINE_DAYS ? settings.dayCount : BASELINE_DAYS;
+  if (n < 3) { haveBaseline = false; return; }
+  const cum = [];
+  for (let d = 0; d < n; d++) {
+    const rec = readDay(settings.dayCount - n + d);
+    let sum = 0; cum.push([]);
+    for (let k = 0; k < SLOTS; k++) { if (getSlot(rec.slots, k) === 2) sum += SLOT_MIN; cum[d][k] = sum & 0xFFFF; }
+  }
+  const v = new Array(BASELINE_DAYS).fill(0);
+  const i25 = Math.trunc((n - 1) * 0.25 + 0.5), i50 = Math.trunc((n - 1) * 0.5 + 0.5), i75 = Math.trunc((n - 1) * 0.75 + 0.5);
+  for (let k = 0; k < SLOTS; k++) {
+    for (let d = 0; d < n; d++) v[d] = cum[d][k];
+    sortU16(v, n);
+    baseP25[k] = v[i25]; baseP50[k] = v[i50]; baseP75[k] = v[i75];
+  }
+  haveBaseline = true;
+}
+function activityLevel() {
+  statusDiffMin = 0;
+  if (!haveBaseline) return LV_LEARNING;
+  if (dayElapsedMs() < 3600000) return LV_EARLY;
+  const k = slotIdx < SLOTS ? slotIdx : SLOTS - 1;
+  const usual = baseP50[k];
+  const today = totalOutMs() / 60000;
+  const ratio = (today + 5) / (usual + 5);
+  statusDiffMin = Math.trunc(today - usual + (today >= usual ? 0.5 : -0.5));
+  if (ratio >= 1.15) return LV_MORE;
+  if (ratio < 0.6) return LV_MUCHLESS;
+  if (ratio < 0.85) return LV_LESS;
+  return LV_USUAL;
+}
+
+// TFT DRAWING HELPERS
+function drawTextBg(x, y, s, color, size, bg) { tft.setTextSize(size); tft.setTextColor(color, bg); tft.setCursor(x, y); tft.print(s); }
+function drawText(x, y, s, color, size) { drawTextBg(x, y, s, color, size, COL_BG); }
+function drawCentered(y, s, color, size) { drawText(idiv(128 - s.length * 6 * size, 2), y, s, color, size); }
+function drawRight(xEnd, y, s, color, size) { drawText(xEnd - s.length * 6 * size, y, s, color, size); }
+function viewAccent(app) {
+  switch (app) { case APP_GLANCE: return COL_SKY; case APP_PATTERN: return COL_PEACH; case APP_WEEK: return COL_MINT; case APP_TRENDS: return COL_LAVENDER; default: return COL_BUTTER; }
+}
+function drawTitle(s, accent) { tft.fillRoundRect(6, 20, 4, 6, 2, accent); drawText(14, 19, s, COL_SUB, 1); }
+function clearContent() { tft.fillRect(0, 15, 128, 131, COL_BG); }
+let footerSaved = "", footerDots = false;
+function drawFooterText(s, color) { tft.fillRect(0, 145, 128, 10, COL_BG); drawCentered(147, s, color, 1); }
+function drawFooter(s) { drawFooterText(s, COL_FAINT); footerSaved = snprintf(24, "%s", s); footerDots = false; }
+function restoreFooter() {
+  if (footerDots) drawDots();
+  else if (footerSaved) drawFooterText(footerSaved, COL_FAINT);
+  else tft.fillRect(0, 145, 128, 10, COL_BG);
+}
+function carouselIndex(app) { for (let i = 0; i < NUM_CAROUSEL; i++) if (CAROUSEL[i] === app) return i; return -1; }
+function drawDots() {
+  footerDots = true;
+  tft.fillRect(0, 145, 128, 10, COL_BG);
+  const idx = carouselIndex(currentApp), gap = 10, x0 = 64 - 2 * gap;
+  for (let i = 0; i < NUM_CAROUSEL; i++) {
+    if (i === idx) tft.fillRoundRect(x0 + i * gap - 4, 148, 9, 4, 2, viewAccent(currentApp));
+    else tft.fillCircle(x0 + i * gap, 150, 1, COL_FAINT);
+  }
+}
+function drawRow(y, label, selected) {
+  const bg = selected ? COL_CARD : COL_BG;
+  tft.fillRoundRect(4, y, 120, 14, 4, bg);
+  drawTextBg(12, y + 3, label, selected ? COL_FG : COL_SUB, 1, bg);
+  if (selected) tft.fillRoundRect(6, y + 4, 3, 6, 1, COL_SKY);
+}
+function drawStat(y, label, value, valueColor) {
+  drawText(6, y, label, COL_SUB, 1);
+  const labelEnd = 6 + label.length * 6;
+  tft.fillRect(labelEnd, y, 122 - labelEnd, 8, COL_BG);
+  drawRight(122, y, value, valueColor, 1);
+}
+function drawDivider() { tft.drawFastHLine(0, 13, 128, timeScale > 1 ? COL_BUTTER : COL_CARD); }
+function drawStatusBar() {
+  const period = U(dataMillis() - stateSince);
+  const t = fmtDur(period, 10);
+  let s, c;
+  if (reminderDue) { s = snprintf(24, "Stand up %s", t); c = COL_CORAL; }
+  else if (seated) { s = snprintf(24, "Seated %s", t); c = period >= Math.floor(remindIntervalMs() * 8 / 10) ? COL_PEACH : COL_SKY; }
+  else { s = snprintf(24, "Out %s", t); c = COL_MINT; }
+  drawText(6, 3, snprintf(24, "%-14.14s", s), c, 1);
+  if (clockOk) {
+    const h = clockNow.hour() % 12;
+    drawRight(124, 3, snprintf(8, "%2d:%02d", h === 0 ? 12 : h, clockNow.minute()), COL_SUB, 1);
+  } else drawRight(124, 3, "--:--", COL_PEACH, 1);
+}
+let holdBarPx = 0;
+function drawHoldBar(held, color) {
+  let px = idiv(S32(U(held - HOLD_BAR_DELAY_MS)) * 120, HOLD_MS - HOLD_BAR_DELAY_MS);
+  if (px > 120) px = 120;
+  if (px > holdBarPx) { tft.fillRect(4 + holdBarPx, 157, px - holdBarPx, 2, color); holdBarPx = px; }
+}
+function clearHoldBar() { if (holdBarPx > 0) { tft.fillRect(0, 156, 128, 4, COL_BG); holdBarPx = 0; } }
+
+function drawLineChart(x, y, w, h, values, n, color, areaColor) {
+  tft.fillRect(x, y, w, h, COL_BG);
+  tft.drawFastHLine(x, y, w, COL_CARD);
+  tft.drawFastHLine(x, y + idiv(h, 2), w, COL_CARD);
+  tft.drawFastHLine(x, y + h - 1, w, COL_FAINT);
+  if (n < 2) return;
+  let lo = values[0], hi = values[0];
+  for (let i = 1; i < n; i++) { if (values[i] < lo) lo = values[i]; if (values[i] > hi) hi = values[i]; }
+  if (hi - lo < 0.001) { hi += 1; lo -= 1; }
+  const pad = (hi - lo) * 0.12; lo -= pad; hi += pad;
+  let prevX = 0, prevY = 0;
+  for (let i = 0; i < n; i++) {
+    const px = x + idiv(i * (w - 1), n - 1);
+    const py = y + Math.trunc((hi - values[i]) * (h - 1) / (hi - lo) + 0.5);
+    if (i > 0) {
+      for (let xx = prevX; xx <= px; xx++) {
+        const yy = prevY + (px === prevX ? 0 : idiv((py - prevY) * (xx - prevX), px - prevX));
+        tft.drawFastVLine(xx, yy + 1, y + h - 2 - yy, areaColor);
+      }
+    }
+    prevX = px; prevY = py;
+  }
+  for (let i = 0; i < n - 1; i++) {
+    const xa = x + idiv(i * (w - 1), n - 1), xb = x + idiv((i + 1) * (w - 1), n - 1);
+    const ya = y + Math.trunc((hi - values[i]) * (h - 1) / (hi - lo) + 0.5);
+    const yb = y + Math.trunc((hi - values[i + 1]) * (h - 1) / (hi - lo) + 0.5);
+    tft.drawLine(xa, ya, xb, yb, color);
+  }
+  tft.fillCircle(prevX, prevY, 2, color);
+}
+
+// SENSING
+function readSeatPressed() { return digitalRead(SEAT_PIN) === LOW; }
+function dateKey(t) { return t.year() * 10000 + t.month() * 100 + t.day(); }
+function buildId() {
+  let h = 2166136261;
+  for (const part of [__DATE__, __TIME__]) for (let i = 0; i < part.length; i++) { h ^= part.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; }
+  return h >>> 0;
+}
+function readClock() {
+  const t = rtc.now();
+  lastClockRead = millis();
+  if (t.year() < 2024 || t.year() > 2099 || t.month() < 1 || t.month() > 12 || t.day() < 1 || t.day() > 31 || t.hour() > 23 || t.minute() > 59) {
+    clockOk = false; return false;
+  }
+  clockNow = t;
+  return true;
+}
+function clockMode() { return clockOk && timeScale === 1; }
+function beforeWindow() { return clockMode() && clockNow.hour() < DAY_START_HOUR; }
+function anchorToClock() {
+  const ms = ((clockNow.hour() - DAY_START_HOUR) * 3600 + clockNow.minute() * 60 + clockNow.second()) * 1000;
+  todayOffsetMs = ms > 0 ? ms : 0;
+  dayStart = dataMillis();
+}
+function clockSlot() { const k = Math.floor(todayOffsetMs / SLOT_MS); return k < SLOTS ? k : SLOTS - 1; }
+function snapToClock() {
+  readClock();
+  if (!clockOk) return;
+  if (dateKey(clockNow) !== todayDate) { closeDay(); return; }
+  anchorToClock();
+  const k = clockSlot();
+  for (let j = k + 1; j < SLOTS; j++) todaySlots[j] = 0;
+  slotIdx = k; slotSamples = 0; slotSeatedSamples = 0;
+}
+function serviceClock() {
+  if (!clockOk || U(millis() - lastClockRead) < 1000) return;
+  if (!readClock()) return;
+  if (timeScale !== 1) return;
+  if (dateKey(clockNow) !== todayDate) { closeDay(); return; }
+  anchorToClock();
+}
+function applyClock(t) {
+  rtc.adjust(t);
+  clockOk = true;
+  if (!readClock()) return false;
+  todayDate = dateKey(clockNow);
+  if (timeScale === 1) snapToClock();
+  drawStatusBar();
+  return true;
+}
+let serialBuf = "";
+function serviceSerialClock() {
+  while (Serial.available()) {
+    const c = Serial.read();
+    if (c === "\r") continue;
+    if (c !== "\n") { if (serialBuf.length < 23) serialBuf += c; continue; }
+    const line = serialBuf; serialBuf = "";
+    // sscanf("%d-%d-%d %d:%d:%d") == 6
+    const m = /^\s*([+-]?\d+)-\s*([+-]?\d+)-\s*([+-]?\d+)\s*([+-]?\d+):\s*([+-]?\d+):\s*([+-]?\d+)/.exec(line);
+    if (!m) { Serial.println("To set the clock, type: 2026-11-08 13:45:00"); continue; }
+    if (!rtcFound) { Serial.println("No DS3231 found - check SDA/SCL/VCC/GND"); continue; }
+    if (!applyClock(new DateTime(+m[1], +m[2], +m[3], +m[4], +m[5], +m[6]))) { Serial.println("That time didn't work - try again"); continue; }
+    Serial.println("Clock set");
+  }
+}
+function closeCurrentPeriod(now) {
+  if (S32(U(now - stateSince)) < 0) now = stateSince;
+  const dur = U(now - stateSince);
+  if (seated) { seatedTotalMs = U(seatedTotalMs + dur); if (dur > longestSitMs) longestSitMs = dur; }
+  else outTotalMs = U(outTotalMs + dur);
+  stateSince = now;
+}
+function onRep(realAt) {
+  reps++;
+  if (reminderDue) { if (U(millis() - reminderAt) <= ANSWER_WINDOW_MS) remindersAnswered++; reminderDue = false; }
+  remindsThisSit = 0;
+  if (!goalReached && reps >= currentGoal()) goalReached = true;
+  testOnStand(realAt);
+}
+function confirmMs(toSeated) { if (testActive()) return TEST_CONFIRM_MS; return toSeated ? SIT_CONFIRM_MS : STAND_CONFIRM_MS; }
+function runSeatStateMachine(realNow, dataNow) {
+  const raw = readSeatPressed();
+  if (raw !== seatRaw) { seatRaw = raw; rawSinceReal = realNow; rawSinceData = dataNow; }
+  if (seatRaw === seated) return;
+  if (U(realNow - rawSinceReal) < confirmMs(seatRaw)) return;
+  if (seatRaw && !satToday) { satToday = true; stateSince = S32(U(rawSinceData - stateSince)) > 0 ? rawSinceData : stateSince; }
+  else closeCurrentPeriod(rawSinceData);
+  seated = seatRaw;
+  if (!seated) onRep(rawSinceReal);
+}
+function checkReminder(dataNow) {
+  if (!seated || testActive() || gameActive()) return;
+  const due = Math.floor(U(dataNow - stateSince) / remindIntervalMs());
+  if (due <= remindsThisSit) return;
+  const realNow = millis();
+  if (lastRemindBeep !== 0 && U(realNow - lastRemindBeep) < MIN_BEEP_GAP_MS) return;
+  remindsThisSit = due;
+  lastRemindBeep = realNow;
+  if (!reminderDue) { reminderDue = true; reminderAt = realNow; remindersTotal++; beepPattern(3, 150, 150); }
+  else beepPattern(2, 150, 150);
+}
+function storeCurrentSlot() { if (slotSamples > 0 && slotIdx < SLOTS) todaySlots[slotIdx] = slotSeatedSamples * 2 >= slotSamples ? 1 : 2; }
+function serviceSlots() {
+  let idx = Math.floor(dayElapsedMs() / SLOT_MS);
+  if (idx > SLOTS - 1) idx = SLOTS - 1;
+  if (idx !== slotIdx) { storeCurrentSlot(); slotSamples = 0; slotSeatedSamples = 0; slotIdx = idx; }
+  const inWindow = dayElapsedMs() < SLOTS * SLOT_MS && !beforeWindow();
+  if (inWindow && satToday) { slotSamples++; if (seated) slotSeatedSamples++; }
+}
+function fillDayRecord(excludeCurrentOut) {
+  storeCurrentSlot();
+  return {
+    seatedMin: Math.floor(totalSeatedMs() / 60000), outMin: Math.floor((excludeCurrentOut && !seated ? outTotalMs : totalOutMs()) / 60000),
+    longestMin: Math.floor(longestSitNowMs() / 60000), reps, remAns: remindersAnswered, remTot: remindersTotal,
+    bestTestDs: Math.floor(todayBestTestMs / 100), slots: packSlots(todaySlots),
+  };
+}
+function resetToday() {
+  const now = dataMillis();
+  reps = 0; goalReached = false;
+  seatedTotalMs = 0; outTotalMs = 0; longestSitMs = 0;
+  stateSince = now;
+  reminderDue = false; remindersTotal = 0; remindersAnswered = 0; remindsThisSit = 0;
+  todayBestTestMs = 0;
+  for (let k = 0; k < SLOTS; k++) todaySlots[k] = 0;
+  slotIdx = 0; slotSamples = 0; slotSeatedSamples = 0;
+  dayStart = now; todayOffsetMs = 0;
+  satToday = seated;
+  if (clockOk && readClock()) { todayDate = dateKey(clockNow); anchorToClock(); slotIdx = clockSlot(); }
+}
+function closeDay() {
+  if (todayHasData()) pushDay(fillDayRecord(true));
+  clearCheckpoint();
+  resetToday();
+  computeBaseline();
+}
+function checkDayRollover(now) {
+  if (!seated && U(now - stateSince) >= NEW_DAY_GAP_MS) { if (todayHasData()) closeDay(); else stateSince = now; }
+}
+function saveCheckpoint() {
+  storeCurrentSlot();
+  EEPROM.putCheckpoint(CP_ADDR, {
+    magic: CP_MAGIC, date: clockOk ? todayDate : 0, elapsedMs: dayElapsedMs(), seatedMs: totalSeatedMs(), outMs: totalOutMs(),
+    longestMs: longestSitNowMs(), bestTestMs: todayBestTestMs, reps, remAns: remindersAnswered, remTot: remindersTotal, slots: packSlots(todaySlots),
+  });
+}
+function checkCheckpoint(now) {
+  if (U(now - lastCheckpoint) < CHECKPOINT_MS) return;
+  lastCheckpoint = now;
+  if (todayHasData()) saveCheckpoint();
+}
+function serviceSensor() {
+  const now = millis();
+  if (U(now - lastRead) < READ_INTERVAL_MS) return;
+  lastRead = now;
+  const dataNow = dataMillis();
+  runSeatStateMachine(now, dataNow);
+  serviceSlots();
+  checkReminder(dataNow);
+  if (!clockMode()) checkDayRollover(dataNow);
+  checkCheckpoint(now);
+}
+
+// APPS
+function nextCarousel() { const i = carouselIndex(currentApp); openApp(CAROUSEL[(i + 1) % NUM_CAROUSEL]); }
+function openMenuFromHere() { menuReturnApp = currentApp; openApp(APP_MENU); }
+
+// ---------- Glance ----------
+const GX = 6, GY = 38, GW = 116, GH = 76;
+let glanceLevel = -1, glanceSlot = -1, glanceLastDraw = 0;
+function gYv(m, ymax) { if (m > ymax) m = ymax; return GY + GH - 1 - Math.trunc(m * (GH - 1) / ymax + 0.5); }
+function gXk(k) { if (k > SLOTS) k = SLOTS; return GX + Math.trunc(k * (GW - 1) / SLOTS + 0.5); }
+function glanceDraw() {
+  const lv = activityLevel(), L = LEVELS[lv];
+  glanceLevel = lv; glanceSlot = slotIdx; glanceLastDraw = millis();
+  tft.fillRoundRect(4, 17, 120, 16, 8, COL_CARD);
+  tft.fillCircle(14, 25, 3, L.color);
+  drawTextBg(22, 21, L.label, L.color === COL_SUB ? COL_FG : L.color, 1, COL_CARD);
+
+  tft.fillRect(GX, GY, GW, GH, COL_BG);
+  const todayNow = totalOutMs() / 60000;
+  let ymax = 60;
+  if (todayNow > ymax) ymax = todayNow;
+  if (haveBaseline && baseP75[SLOTS - 1] > ymax) ymax = baseP75[SLOTS - 1];
+  ymax *= 1.1;
+  tft.drawFastHLine(GX, GY + idiv(GH, 2), GW, COL_CARD);
+  tft.drawFastHLine(GX, GY + GH - 1, GW, COL_FAINT);
+  if (haveBaseline) {
+    for (let col = 0; col < GW; col++) {
+      const k = idiv(col * SLOTS, GW);
+      const yt = gYv(baseP75[k], ymax), yb = gYv(baseP25[k], ymax);
+      tft.drawFastVLine(GX + col, yt, (yb - yt + 1) > 1 ? yb - yt + 1 : 1, COL_BAND);
+      if (col % 3 === 0) tft.drawPixel(GX + col, gYv(baseP50[k], ymax), COL_SUB);
+    }
+  }
+  let px = gXk(0), py = gYv(0, ymax), cum = 0;
+  for (let k = 0; k <= slotIdx; k++) {
+    let nx, ny;
+    if (k < slotIdx) { if (todaySlots[k] === 2) cum += SLOT_MIN; nx = gXk(k + 1); ny = gYv(cum, ymax); }
+    else { nx = gXk(dayElapsedMs() / SLOT_MS); ny = gYv(todayNow, ymax); }
+    tft.drawLine(px, py, nx, ny, L.color);
+    tft.drawLine(px, py - 1, nx, ny - 1, L.color);
+    px = nx; py = ny;
+  }
+  tft.fillCircle(px, py, 3, L.color);
+
+  tft.fillRect(0, GY + GH + 2, 128, 8, COL_BG);
+  let h0, h8, h16;
+  if (clockMode()) { h0 = fmtHour(DAY_START_HOUR); h8 = fmtHour(DAY_START_HOUR + 8); h16 = fmtHour(DAY_START_HOUR + 16); }
+  else { h0 = "0h"; h8 = "8h"; h16 = "16h"; }
+  drawText(GX, GY + GH + 3, h0, COL_FAINT, 1);
+  drawCentered(GY + GH + 3, h8, COL_FAINT, 1);
+  drawRight(GX + GW, GY + GH + 3, h16, COL_FAINT, 1);
+  glanceCaption(lv);
+}
+function glanceCaption(lv) {
+  let s, c = COL_FAINT;
+  if (lv === LV_LEARNING) s = snprintf(24, "Needs 3 days of data");
+  else if (lv === LV_EARLY) s = snprintf(24, "Compares after 1 h");
+  else { s = snprintf(24, "%s%d min out vs usual", statusDiffMin >= 0 ? "+" : "", statusDiffMin); c = LEVELS[lv].color; }
+  const len = s.length, padL = idiv(21 - len, 2);
+  drawText(1, 130, snprintf(24, "%*s%s%*s", padL, "", s, 21 - len - padL, ""), c, 1);
+  glanceLastDraw = millis();
+}
+function glanceEnter() { glanceDraw(); drawDots(); }
+function glanceUpdate() {
+  const lv = activityLevel();
+  if (lv !== glanceLevel || slotIdx !== glanceSlot) glanceDraw();
+  else if (U(millis() - glanceLastDraw) >= 10000) glanceCaption(lv);
+}
+
+// ---------- Pattern ----------
+const PAT_X = 4, PAT_Y = 30, PAT_ROW = 14, PAT_H = 10;
+let patternSlot = -1;
+function slotColor(s, runLen) { if (s === 2) return COL_MINT; if (s === 1) return runLen >= LONG_SIT_SLOTS ? COL_PEACH : COL_SKY_DIM; return COL_CARD; }
+function drawPatternRow(y, slots, upto) {
+  tft.fillRect(PAT_X, y, SLOTS, PAT_H, COL_CARD);
+  let k = 0;
+  while (k < upto) { let j = k; while (j < upto && slots[j] === slots[k]) j++; tft.fillRect(PAT_X + k, y, j - k, PAT_H, slotColor(slots[k], j - k)); k = j; }
+}
+function patternRows() {
+  const un = new Array(SLOTS).fill(0);
+  const have = settings.dayCount < 6 ? settings.dayCount : 6;
+  for (let i = 0; i < 6; i++) {
+    const y = PAT_Y + i * PAT_ROW, dayIndex = settings.dayCount - 6 + i;
+    if (i >= 6 - have && dayIndex >= 0) { unpackSlots(readDay(dayIndex).slots, un); drawPatternRow(y, un, SLOTS); }
+    else tft.fillRect(PAT_X, y, SLOTS, PAT_H, COL_CARD);
+  }
+  for (let k = 0; k < SLOTS; k++) un[k] = todaySlots[k];
+  if (slotIdx < SLOTS && satToday) un[slotIdx] = seated ? 1 : 2;
+  const upto = slotIdx + 1 < SLOTS ? slotIdx + 1 : SLOTS;
+  drawPatternRow(PAT_Y + 6 * PAT_ROW, un, upto);
+  tft.fillRect(0, PAT_Y + 6 * PAT_ROW, 2, PAT_H, COL_FG);
+  patternSlot = slotIdx;
+}
+function patternEnter() {
+  drawTitle("Sitting pattern", COL_PEACH);
+  patternRows();
+  const ly = 128;
+  tft.fillRect(4, ly + 1, 6, 6, COL_MINT); drawText(12, ly, "out", COL_SUB, 1);
+  tft.fillRect(36, ly + 1, 6, 6, COL_SKY_DIM); drawText(44, ly, "sit", COL_SUB, 1);
+  tft.fillRect(68, ly + 1, 6, 6, COL_PEACH); drawText(76, ly, "long sit", COL_SUB, 1);
+  drawDots();
+}
+function patternUpdate() { if (slotIdx !== patternSlot) patternRows(); }
+
+// ---------- Week ----------
+let weekShownSlot = -1;
+function shareOf(d) { const tot = d.seatedMin + d.outMin; return tot ? d.outMin / tot : 0; }
+function usualShare() {
+  const n = settings.dayCount < BASELINE_DAYS ? settings.dayCount : BASELINE_DAYS;
+  if (n === 0) return 0;
+  const v = new Array(BASELINE_DAYS).fill(0);
+  for (let i = 0; i < n; i++) v[i] = Math.trunc(shareOf(readDay(settings.dayCount - n + i)) * 1000) & 0xFFFF;
+  sortU16(v, n);
+  return v[idiv(n, 2)] / 1000;
+}
+function weekDraw() {
+  tft.fillRect(0, 28, 128, 116, COL_BG);
+  const v = new Array(7).fill(0), has = new Array(7).fill(false);
+  for (let i = 0; i < 6; i++) { const dayIndex = settings.dayCount - 6 + i; has[i] = dayIndex >= 0; if (has[i]) v[i] = shareOf(readDay(dayIndex)); }
+  const tot = U(totalSeatedMs() + totalOutMs());
+  has[6] = tot > 0 && dayElapsedMs() >= 3600000;
+  v[6] = has[6] ? totalOutMs() / tot : 0;
+  const usual = usualShare();
+  const top = 36, base = 118, h = base - top;
+  let max = 0.5;
+  for (let i = 0; i < 7; i++) if (has[i] && v[i] > max) max = v[i];
+  max *= 1.15;
+  const lv = activityLevel();
+  for (let i = 0; i < 7; i++) {
+    const x = 10 + i * 16;
+    if (!has[i]) { tft.fillRect(x, base - 1, 12, 1, COL_FAINT); continue; }
+    let bh = Math.trunc(v[i] / max * h + 0.5);
+    if (bh < 2) bh = 2;
+    let c = v[i] >= usual ? COL_MINT : COL_FAINT;
+    if (i === 6) c = LEVELS[lv].color === COL_SUB ? COL_SKY : LEVELS[lv].color;
+    tft.fillRoundRect(x, base - bh, 12, bh, bh >= 6 ? 3 : 1, c);
+  }
+  if (settings.dayCount > 0) {
+    const gy = base - Math.trunc(usual / max * h + 0.5);
+    for (let x = 8; x < 122; x += 4) tft.drawFastHLine(x, gy, 2, COL_SUB);
+  }
+  drawText(10 + 6 * 16 + 3, base + 3, "T", COL_SUB, 1);
+  let line;
+  const u = Math.trunc(usual * 100 + 0.5), t = Math.trunc(v[6] * 100 + 0.5);
+  if (!has[6]) line = settings.dayCount > 0 ? snprintf(24, "Usual %d%% out of seat", u) : snprintf(24, "Today shows after 1 h");
+  else if (settings.dayCount > 0) line = snprintf(24, "Now %d%% - usual %d%%", t, u);
+  else line = snprintf(24, "Out of seat: %d%%", t);
+  drawCentered(132, line, COL_SUB, 1);
+  weekShownSlot = slotIdx;
+}
+function weekEnter() { drawTitle("Time out of seat", COL_MINT); weekDraw(); drawDots(); }
+function weekUpdate() { if (slotIdx !== weekShownSlot) weekDraw(); }
+
+// ---------- Trends ----------
+function trendsEnter() {
+  drawTitle("Last 30 days", COL_LAVENDER);
+  const n = settings.dayCount < 30 ? settings.dayCount : 30;
+  if (n < 2) {
+    drawCentered(66, "Not enough data yet", COL_SUB, 1);
+    drawCentered(80, "Hold, then Data >", COL_FAINT, 1);
+    drawCentered(92, "Load demo data", COL_FAINT, 1);
+  } else {
+    const share = [], longest = []; let sumS = 0, sumL = 0;
+    for (let i = 0; i < n; i++) { const rec = readDay(settings.dayCount - n + i); share[i] = shareOf(rec) * 100; longest[i] = rec.longestMin; sumS += share[i]; sumL += longest[i]; }
+    drawText(6, 32, "Out of seat", COL_SUB, 1);
+    drawRight(122, 32, snprintf(16, "%d%%", Math.trunc(sumS / n + 0.5)), COL_MINT, 1);
+    drawLineChart(6, 42, 116, 30, share, n, COL_MINT, COL_MINT_DIM);
+    drawText(6, 80, "Longest sit", COL_SUB, 1);
+    drawRight(122, 80, snprintf(16, "%d min", Math.trunc(sumL / n + 0.5)), COL_LAVENDER, 1);
+    drawLineChart(6, 90, 116, 30, longest, n, COL_LAVENDER, COL_LAV_DIM);
+    if (n >= 10) {
+      let recent = 0, before = 0;
+      for (let i = n - 7; i < n; i++) recent += share[i];
+      for (let i = 0; i < n - 7; i++) before += share[i];
+      const pts = Math.trunc(recent / 7 - before / (n - 7) + (recent / 7 >= before / (n - 7) ? 0.5 : -0.5));
+      drawCentered(128, snprintf(24, "This week %s%d pts out", pts >= 0 ? "+" : "", pts), pts >= 0 ? COL_MINT : COL_PEACH, 1);
+    } else drawCentered(128, "Trend after 10 days", COL_FAINT, 1);
+  }
+  drawDots();
+}
+
+// ---------- Exercise ----------
+let exShownReps = -1;
+const EX_N = 24, EX_CX = 30, EX_CY = 56, EX_R = 20;
+function exerciseRing() {
+  const goal = currentGoal();
+  const filled = idiv((reps < goal ? reps : goal) * EX_N, goal);
+  for (let i = 0; i < EX_N; i++) {
+    const a = -PI / 2 + i * 2 * PI / EX_N;
+    const x = EX_CX + Math.trunc(EX_R * Math.cos(a) + (Math.cos(a) >= 0 ? 0.5 : -0.5));
+    const y = EX_CY + Math.trunc(EX_R * Math.sin(a) + (Math.sin(a) >= 0 ? 0.5 : -0.5));
+    tft.fillCircle(x, y, 1, i < filled ? (goalReached ? COL_BUTTER : COL_MINT) : COL_FAINT);
+  }
+  tft.fillRect(EX_CX - 13, EX_CY - 8, 26, 16, COL_BG);
+  const s = snprintf(8, "%d", reps);
+  drawText(EX_CX - s.length * 6, EX_CY - 7, s, goalReached ? COL_BUTTER : COL_FG, 2);
+  drawText(60, 44, "stand-ups", COL_SUB, 1);
+  drawText(60, 56, snprintf(12, "goal %-3d", goal), goalReached ? COL_BUTTER : COL_FAINT, 1);
+  exShownReps = reps;
+}
+function exerciseEnter() {
+  drawTitle("Exercise", COL_BUTTER);
+  exerciseRing();
+  drawText(6, 86, "Last test", COL_SUB, 1);
+  const n = settings.testCount;
+  if (n === 0) drawCentered(106, "No tests yet", COL_FAINT, 1);
+  else {
+    const v = []; let best = settings.tests[0].ds;
+    for (let i = 0; i < n; i++) { v[i] = settings.tests[i].ds / 10; if (settings.tests[i].ds < best) best = settings.tests[i].ds; }
+    const latest = settings.tests[n - 1].ds;
+    drawRight(122, 86, fmtTenths(latest * 100, 12), latest === best ? COL_BUTTER : COL_FG, 1);
+    drawLineChart(6, 96, 116, 26, v, n, COL_BUTTER, COL_BUTTER_DIM);
+  }
+  drawCentered(130, "Hold to start a test", COL_FAINT, 1);
+  drawDots();
+}
+function exerciseUpdate() { if (reps !== exShownReps) exerciseRing(); }
+function exerciseHold() { menuReturnApp = APP_EXERCISE; openApp(APP_TEST_RUN); }
+
+// ---------- Demo data ----------
+function rnd() { return random(10000) / 10000; }
+function genSlots(activity, length, out) {
+  for (let k = 0; k < SLOTS; k++) out[k] = 0;
+  let k = 0;
+  while (k < length) {
+    let sit = Math.trunc((2 + rnd() * 5) / activity + 0.5); if (sit < 1) sit = 1;
+    for (let j = 0; j < sit && k < length; j++) out[k++] = 1;
+    let outB = Math.trunc((0.6 + rnd() * 1.6) * activity + 0.5); if (outB < 1) outB = 1;
+    for (let j = 0; j < outB && k < length; j++) out[k++] = 2;
+  }
+}
+function summarizeSlots(s) {
+  let seatedB = 0, outB = 0, longest = 0, run = 0, ups = 0;
+  for (let k = 0; k < SLOTS; k++) {
+    if (s[k] === 1) { seatedB++; run++; if (run > longest) longest = run; }
+    else { if (s[k] === 2) { outB++; if (run > 0) ups++; } run = 0; }
+  }
+  return { sm: seatedB * SLOT_MIN, om: outB * SLOT_MIN, lm: longest * SLOT_MIN, ups };
+}
+function loadDemoData() {
+  settings.dayCount = 0; settings.dayHead = 0; settings.testCount = 0; settings.testNumber = 0;
+  const un = new Array(SLOTS).fill(0);
+  for (let i = 0; i < 30; i++) {
+    const trend = i / 29;
+    genSlots(0.85 + 0.35 * trend + (rnd() - 0.5) * 0.2, 100 + random(12), un);
+    const r = summarizeSlots(un);
+    const rec = { seatedMin: r.sm, outMin: r.om, longestMin: r.lm, reps: r.ups * 2, remAns: 3 + random(3), remTot: 5 + random(2), bestTestDs: 0, slots: null };
+    if (i % 3 === 0 && settings.testCount < MAX_TESTS) {
+      settings.testNumber++;
+      const ds = Math.trunc((16.5 - 4 * trend + (rnd() - 0.5)) * 10) & 0xFFFF;
+      settings.tests[settings.testCount] = { n: settings.testNumber, ds };
+      settings.testCount++;
+      rec.bestTestDs = ds;
+    }
+    rec.slots = packSlots(un);
+    EEPROM.putDay(dayAddr(settings.dayCount), rec);
+    settings.dayCount++;
+  }
+  saveSettings();
+  resetToday();
+  let startSlots = 38;
+  if (clockMode()) { startSlots = clockSlot(); if (startSlots < 1) startSlots = 1; }
+  genSlots(0.7, startSlots, todaySlots);
+  const r = summarizeSlots(todaySlots);
+  if (!clockMode()) todayOffsetMs = startSlots * SLOT_MS;
+  slotIdx = startSlots < SLOTS ? startSlots : SLOTS - 1;
+  satToday = true;
+  seatedTotalMs = r.sm * 60000; outTotalMs = r.om * 60000; longestSitMs = r.lm * 60000;
+  reps = r.ups * 2; goalReached = reps >= currentGoal();
+  computeBaseline();
+}
+
+// ---------- CSV export ----------
+function exportCsv() {
+  Serial.println("day,out_of_seat_min,seated_min,out_pct,longest_sit_min,stand_ups,long_sit_alerts,alerts_answered,best_test_s,pattern_8min");
+  for (let i = 0; i < settings.dayCount; i++) {
+    const rec = readDay(i);
+    Serial.print(snprintf(80, "%d,%u,%u,%d,%u,%u,%u,%u,", i + 1, rec.outMin, rec.seatedMin, Math.trunc(shareOf(rec) * 100 + 0.5), rec.longestMin, rec.reps, rec.remTot, rec.remAns));
+    if (rec.bestTestDs) { Serial.print(Math.floor(rec.bestTestDs / 10)); Serial.print("."); Serial.print(rec.bestTestDs % 10); }
+    Serial.print(",");
+    let p = ""; for (let k = 0; k < SLOTS; k++) p += getSlot(rec.slots, k);
+    Serial.println(p);
+  }
+}
+
+// ---------- Menu ----------
+const IT_TEST = 0, IT_CHECK = 1, IT_SETTINGS = 2, IT_DATA = 3, IT_BACK = 4, IT_GOAL = 5, IT_REMIND = 6, IT_SOUND = 7,
+      IT_FAST = 8, IT_CLOCK = 9, IT_DEMO = 10, IT_ENDDAY = 11, IT_EXPORT = 12, IT_RESET = 13, IT_NONE = 14;
+const PAGE_MAIN = 0, PAGE_SETTINGS = 1, PAGE_DATA = 2;
+const PAGE_ITEMS = [
+  [IT_TEST, IT_CHECK, IT_SETTINGS, IT_DATA, IT_BACK, IT_NONE],
+  [IT_GOAL, IT_REMIND, IT_SOUND, IT_FAST, IT_CLOCK, IT_BACK],
+  [IT_DEMO, IT_ENDDAY, IT_EXPORT, IT_RESET, IT_BACK, IT_NONE],
+];
+const PAGE_LEN = [5, 6, 5];
+const PAGE_TITLES = ["Menu", "Settings", "Data"];
+let menuPage = PAGE_MAIN, menuSel = 0, menuConfirm = IT_NONE, menuFlash = IT_NONE, menuReturnItem = IT_NONE;
+let menuConfirmUntil = 0, menuFlashUntil = 0;
+function menuLabel(item, len) {
+  if (item === menuFlash && millis() < menuFlashUntil) {
+    const f = item === IT_DEMO ? "Demo data loaded" : item === IT_ENDDAY ? "Day saved" : item === IT_EXPORT ? "Sent over USB" : item === IT_CLOCK ? "Clock set" : "Today cleared";
+    return snprintf(len, "%s", f);
+  }
+  if (item === menuConfirm) return snprintf(len, "Hold to confirm");
+  const r = REMIND_OPTIONS_S[settings.remindIndex];
+  switch (item) {
+    case IT_TEST: return snprintf(len, "Start test");
+    case IT_CHECK: return snprintf(len, "Sensor & clock");
+    case IT_SETTINGS: return snprintf(len, "Settings  >");
+    case IT_DATA: return snprintf(len, "Data  >");
+    case IT_GOAL: return snprintf(len, "Exercise goal: %d", currentGoal());
+    case IT_REMIND: return r < 60 ? snprintf(len, "Long sit: %us demo", r) : snprintf(len, "Long sit: %u min", Math.floor(r / 60));
+    case IT_SOUND: return snprintf(len, "Sound: %s", settings.soundOn ? "On" : "Off");
+    case IT_FAST: return snprintf(len, "%s", timeScale === 60 ? "Fast: 1 min = 1 h" : timeScale === 20 ? "Fast: 1 min=20 min" : "Fast mode: Off");
+    case IT_CLOCK: return snprintf(len, "Set clock  >");
+    case IT_DEMO: return snprintf(len, "Load demo data");
+    case IT_ENDDAY: return snprintf(len, "End day now");
+    case IT_EXPORT: return snprintf(len, "Export over USB");
+    case IT_RESET: return snprintf(len, "Clear today");
+    default: return snprintf(len, "Back");
+  }
+}
+function drawMenuRow(i) { drawRow(30 + i * 17, menuLabel(PAGE_ITEMS[menuPage][i], 24), i === menuSel); }
+function drawMenuPage() {
+  clearContent();
+  drawTitle(PAGE_TITLES[menuPage], COL_SKY);
+  for (let i = 0; i < PAGE_LEN[menuPage]; i++) drawMenuRow(i);
+  drawFooter("tap: next - hold: ok");
+}
+function menuGo(page) { menuPage = page; menuSel = 0; menuConfirm = IT_NONE; drawMenuPage(); }
+function menuEnter() {
+  if (menuReturnItem === IT_NONE) { menuGo(PAGE_MAIN); return; }
+  for (let pg = 0; pg < 3; pg++) for (let i = 0; i < PAGE_LEN[pg]; i++) if (PAGE_ITEMS[pg][i] === menuReturnItem) { menuPage = pg; menuSel = i; }
+  menuReturnItem = IT_NONE;
+  menuConfirm = IT_NONE;
+  drawMenuPage();
+}
+function menuRedrawItem(item) { for (let i = 0; i < PAGE_LEN[menuPage]; i++) if (PAGE_ITEMS[menuPage][i] === item) drawMenuRow(i); }
+function menuUpdate() {
+  if (menuConfirm !== IT_NONE && millis() >= menuConfirmUntil) { const c = menuConfirm; menuConfirm = IT_NONE; menuRedrawItem(c); }
+  if (menuFlash !== IT_NONE && millis() >= menuFlashUntil) { const f = menuFlash; menuFlash = IT_NONE; menuRedrawItem(f); }
+}
+function menuTap() {
+  if (menuConfirm !== IT_NONE) { const c = menuConfirm; menuConfirm = IT_NONE; menuRedrawItem(c); }
+  const old = menuSel;
+  menuSel = (menuSel + 1) % PAGE_LEN[menuPage];
+  drawMenuRow(old); drawMenuRow(menuSel);
+}
+function flash(item) { menuFlash = item; menuFlashUntil = U(millis() + 2500); }
+function confirmed(item) {
+  if (menuConfirm === item && millis() < menuConfirmUntil) { menuConfirm = IT_NONE; return true; }
+  menuConfirm = item; menuConfirmUntil = U(millis() + 3000);
+  return false;
+}
+function menuHold() {
+  const item = PAGE_ITEMS[menuPage][menuSel];
+  switch (item) {
+    case IT_TEST: openApp(APP_TEST_RUN); return;
+    case IT_CHECK: openApp(APP_CHECK); return;
+    case IT_CLOCK: openApp(APP_SETCLOCK); return;
+    case IT_SETTINGS: menuGo(PAGE_SETTINGS); return;
+    case IT_DATA: menuGo(PAGE_DATA); return;
+    case IT_GOAL: settings.goalIndex = (settings.goalIndex + 1) % NUM_GOALS; goalReached = reps >= currentGoal(); saveSettings(); break;
+    case IT_REMIND: settings.remindIndex = (settings.remindIndex + 1) % NUM_REMINDS; saveSettings(); break;
+    case IT_SOUND: settings.soundOn = settings.soundOn ? 0 : 1; saveSettings(); beepPattern(1, 80, 50); break;
+    case IT_FAST:
+      fastIndex = (fastIndex + 1) % NUM_FAST;
+      setTimeScale(FAST_SPEEDS[fastIndex]);
+      if (timeScale === 1 && clockOk) snapToClock();
+      drawDivider();
+      break;
+    case IT_DEMO:
+      drawRow(30 + menuSel * 17, "Saving...", true);
+      loadDemoData(); saveCheckpoint(); flash(IT_DEMO); beepPattern(1, 80, 50);
+      break;
+    case IT_ENDDAY: if (confirmed(IT_ENDDAY)) { closeDay(); flash(IT_ENDDAY); beepPattern(2, 80, 80); } break;
+    case IT_EXPORT: exportCsv(); flash(IT_EXPORT); break;
+    case IT_RESET: if (confirmed(IT_RESET)) { resetToday(); clearCheckpoint(); flash(IT_RESET); beepPattern(2, 80, 80); } break;
+    default:
+      if (menuPage === PAGE_MAIN) openApp(menuReturnApp); else menuGo(PAGE_MAIN);
+      return;
+  }
+  drawMenuRow(menuSel);
+}
+
+// ---------- Test run ----------
+const T_WAIT_SIT = 0, T_COUNTDOWN = 1, T_RUNNING = 2, T_RESULT = 3;
+let testState = T_WAIT_SIT, testStands = 0, testLastShown = -1, testStart = 0, testPhaseStart = 0, testLastDraw = 0;
+function testActive() { return currentApp === APP_TEST_RUN && testState !== T_RESULT; }
+function testBusy() { return true; }
+const RESULT_SHOW_MS = 6000;
+let testResultAt = 0;
+function testRunEnter() {
+  testState = T_WAIT_SIT;
+  drawTitle("Sit-to-stand x5", COL_BUTTER);
+  drawCentered(58, "Sit down", COL_FG, 2);
+  drawCentered(80, "to begin", COL_SUB, 1);
+  drawFooter("hold to cancel");
+}
+function testRunUpdate() {
+  const now = millis();
+  if (testState === T_RESULT) { if (U(now - testResultAt) >= RESULT_SHOW_MS) openApp(APP_EXERCISE); return; }
+  if (testState === T_WAIT_SIT && seated) {
+    testState = T_COUNTDOWN; testPhaseStart = now; testLastShown = -1;
+    clearContent(); drawTitle("Sit-to-stand x5", COL_BUTTER);
+    drawCentered(108, "Stand up 5 times", COL_SUB, 1);
+    drawCentered(120, "as fast as is safe", COL_SUB, 1);
+  } else if (testState === T_COUNTDOWN) {
+    const left = 3 - Math.floor(U(now - testPhaseStart) / 1000);
+    if (left <= 0) {
+      testState = T_RUNNING; testStart = now; testStands = 0; testLastShown = -1; testLastDraw = 0;
+      tft.fillRect(0, 28, 128, 70, COL_BG);
+      beepPattern(1, 400, 50);
+    } else if (left !== testLastShown) {
+      testLastShown = left;
+      tft.fillRect(0, 36, 128, 44, COL_BG);
+      drawCentered(42, snprintf(12, "%d", left), COL_FG, 4);
+      beepPattern(1, 80, 50);
+    }
+  } else if (testState === T_RUNNING) {
+    if (testStands !== testLastShown) {
+      testLastShown = testStands;
+      for (let i = 0; i < 5; i++) tft.fillCircle(40 + i * 12, 40, 3, i < testStands ? COL_MINT : COL_FAINT);
+    }
+    if (U(now - testLastDraw) >= 100) {
+      testLastDraw = now;
+      drawCentered(60, snprintf(12, "%7s", fmtTenths(U(now - testStart), 12)), COL_FG, 2);
+    }
+  }
+}
+function testOnStand(now) {
+  if (currentApp !== APP_TEST_RUN || testState !== T_RUNNING) return;
+  if (S32(U(now - testStart)) < 0) return;
+  beepPattern(1, 60, 40);
+  if (++testStands < 5) return;
+  const ms = U(now - testStart);
+  const ds = Math.floor(ms / 100) & 0xFFFF;
+  let prevBest = 0;
+  for (let i = 0; i < settings.testCount; i++) if (prevBest === 0 || settings.tests[i].ds < prevBest) prevBest = settings.tests[i].ds;
+  if (settings.testCount === MAX_TESTS) {
+    for (let i = 0; i < MAX_TESTS - 1; i++) settings.tests[i] = { ...settings.tests[i + 1] };
+    settings.testCount--;
+  }
+  settings.testNumber = (settings.testNumber + 1) & 0xFFFF;
+  settings.tests[settings.testCount] = { n: settings.testNumber, ds };
+  settings.testCount++;
+  saveSettings();
+  if (todayBestTestMs === 0 || ms < todayBestTestMs) todayBestTestMs = ms;
+
+  testState = T_RESULT;
+  testResultAt = millis();
+  clearContent(); drawTitle("Result", COL_BUTTER);
+  const best = prevBest === 0 || ds < prevBest;
+  drawCentered(44, fmtTenths(ms, 12), best ? COL_BUTTER : COL_FG, 3);
+  drawCentered(76, snprintf(24, "Test #%u saved", settings.testNumber), COL_SUB, 1);
+  if (prevBest === 0) drawCentered(92, "First result", COL_SUB, 1);
+  else if (best) drawCentered(92, "New personal best", COL_BUTTER, 1);
+  else drawCentered(92, snprintf(24, "Best is %s", fmtTenths(prevBest * 100, 12)), COL_SUB, 1);
+  drawFooter("tap to finish");
+}
+function testRunHold() { openApp(APP_EXERCISE); }
+function testRunTap() { if (testState === T_RESULT) openApp(APP_EXERCISE); }
+
+// ---------- Sensor & clock ----------
+let checkLastDraw = 0, checkShownClock = -1;
+function checkDraw() {
+  checkLastDraw = millis();
+  drawCentered(38, seatRaw ? "Pressed" : " Empty ", seatRaw ? COL_SKY : COL_MINT, 2);
+  drawCentered(60, snprintf(24, "%-17s", seated ? "Counted: seated" : "Counted: out"), COL_SUB, 1);
+  const c = clockOk ? 1 : 0;
+  if (c !== checkShownClock) { tft.fillRect(0, 86, 128, 40, COL_BG); checkShownClock = c; }
+  if (clockOk) {
+    drawCentered(90, snprintf(24, "%04d-%02d-%02d", clockNow.year(), clockNow.month(), clockNow.day()), COL_SUB, 1);
+    drawCentered(104, snprintf(24, "%02d:%02d:%02d", clockNow.hour(), clockNow.minute(), clockNow.second()), COL_FG, 2);
+  } else {
+    drawCentered(92, rtcFound ? "Clock not set" : "Clock not found", COL_CORAL, 1);
+    drawCentered(106, rtcFound ? "Menu > Settings >" : "Check SDA/SCL wires", COL_FAINT, 1);
+    if (rtcFound) drawCentered(116, "Set clock", COL_FAINT, 1);
+  }
+}
+function checkEnter() {
+  drawTitle("Sensor & clock", COL_LAVENDER);
+  drawCentered(72, snprintf(24, "Stand: %lu.%lu s empty", Math.floor(STAND_CONFIRM_MS / 1000), Math.floor(STAND_CONFIRM_MS / 100) % 10), COL_FAINT, 1);
+  checkShownClock = -1;
+  checkDraw();
+  drawFooter("hold: back");
+}
+function checkUpdate() { if (U(millis() - checkLastDraw) >= 200) checkDraw(); }
+function checkHold() { openApp(menuReturnApp); }
+
+// ---------- Set clock ----------
+const SC_YEAR = 0, SC_MONTH = 1, SC_DAY = 2, SC_HOUR = 3, SC_MIN10 = 4, SC_MIN1 = 5, SC_ACTION = 6;
+const SA_SAVE = 0, SA_EDIT = 1, SA_CANCEL = 2, SC_YEARS = 6;
+let scY = 2026, scMo = 1, scD = 1, scH = 0, scMi = 0, scField = SC_YEAR, scAction = SA_SAVE, scYearMin = 2026;
+function daysInMonth(y, m) { return dim(y, m); }
+function scDraw() {
+  drawText(4, 40, snprintf(16, "%04d-%02d-%02d", scY, scMo, scD), COL_FG, 2);
+  drawText(34, 70, snprintf(16, "%02d:%02d", scH, scMi), COL_FG, 2);
+  tft.fillRect(0, 57, 128, 2, COL_BG);
+  tft.fillRect(0, 87, 128, 2, COL_BG);
+  let x = -1, y = 0, w = 0;
+  switch (scField) {
+    case SC_YEAR: x = 4; y = 57; w = 48; break;
+    case SC_MONTH: x = 4 + 5 * 12; y = 57; w = 24; break;
+    case SC_DAY: x = 4 + 8 * 12; y = 57; w = 24; break;
+    case SC_HOUR: x = 34; y = 87; w = 24; break;
+    case SC_MIN10: x = 34 + 3 * 12; y = 87; w = 12; break;
+    case SC_MIN1: x = 34 + 4 * 12; y = 87; w = 12; break;
+  }
+  if (x >= 0) tft.fillRect(x, y, w - 2, 2, COL_BUTTER);
+  tft.fillRect(0, 96, 128, 49, COL_BG);
+  if (scField === SC_ACTION) {
+    drawRow(98, "Save", scAction === SA_SAVE);
+    drawRow(114, "Edit again", scAction === SA_EDIT);
+    drawRow(130, "Cancel", scAction === SA_CANCEL);
+    drawFooter("tap: next - hold: ok");
+  } else {
+    drawCentered(104, "tap: +1   hold: next", COL_FAINT, 1);
+    drawFooter("long hold: -1 (undo)");
+  }
+}
+function setClockEnter() {
+  drawTitle("Set clock", COL_LAVENDER);
+  if (!rtcFound) {
+    drawCentered(60, "Clock not found", COL_CORAL, 1);
+    drawCentered(74, "Check SDA/SCL wires", COL_FAINT, 1);
+    drawFooter("hold: back");
+    return;
+  }
+  const t = (clockOk && readClock()) ? clockNow : DateTime.fromStrings(__DATE__, __TIME__);
+  scYearMin = parseInt(__DATE__.slice(7), 10);
+  scY = t.year(); scMo = t.month(); scD = t.day(); scH = t.hour(); scMi = t.minute();
+  if (scY < scYearMin || scY >= scYearMin + SC_YEARS) scY = scYearMin;
+  scField = SC_YEAR; scAction = SA_SAVE;
+  scDraw();
+}
+function scStep(step) {
+  switch (scField) {
+    case SC_YEAR: scY = scYearMin + (scY - scYearMin + step + SC_YEARS) % SC_YEARS; break;
+    case SC_MONTH: scMo = (scMo - 1 + step + 12) % 12 + 1; break;
+    case SC_DAY: { const n = daysInMonth(scY, scMo); scD = (scD - 1 + step + n) % n + 1; } break;
+    case SC_HOUR: scH = (scH + step + 24) % 24; break;
+    case SC_MIN10: scMi = ((idiv(scMi, 10) + step + 6) % 6) * 10 + scMi % 10; break;
+    case SC_MIN1: scMi = idiv(scMi, 10) * 10 + (scMi % 10 + step + 10) % 10; break;
+    default: scAction = (scAction + step + 3) % 3; break;
+  }
+  if (scD > daysInMonth(scY, scMo)) scD = daysInMonth(scY, scMo);
+  scDraw();
+}
+function setClockTap() { if (rtcFound) scStep(+1); }
+function setClockUndo() { if (rtcFound) scStep(-1); }
+function setClockHold() {
+  if (!rtcFound) { openApp(APP_MENU); return; }
+  if (scField < SC_ACTION) { scField++; scDraw(); return; }
+  if (scAction === SA_EDIT) { scField = SC_YEAR; scAction = SA_SAVE; scDraw(); return; }
+  menuReturnItem = IT_CLOCK;
+  if (scAction === SA_SAVE && applyClock(new DateTime(scY, scMo, scD, scH, scMi, 0))) { flash(IT_CLOCK); beepPattern(1, 80, 50); }
+  openApp(APP_MENU);
+}
+
+// ---------- Hidden game ----------
+const GM_TOP = 28, GM_BOT = 140, GM_PIPE_W = 12, GM_GAP = 46, GM_SPACING = 64, GM_SPEED = 2, GM_BIRD_X = 30, GM_BIRD = 7, GM_PIPES = 3;
+const GM_FRAME_MS = 33, GM_GRAVITY = 0.32, GM_FLAP = -3.4, GM_MAX_FALL = 4.5;
+const GM_COLOURS = [COL_MINT, COL_SKY, COL_LAVENDER, COL_PEACH];
+const G_READY = 0, G_PLAY = 1, G_OVER = 2;
+let gState = G_READY, gScore = 0, gDrawnY = -1, gY = 0, gVy = 0;
+const gPipeX = [0, 0, 0], gPipeGap = [0, 0, 0], gPipeCol = [0, 0, 0], gScored = [false, false, false];
+let gLastFrame = 0, gOverAt = 0;
+function gameActive() { return currentApp === APP_GAME && gState === G_PLAY; }
+function gRandGap() { return GM_TOP + 10 + random(GM_BOT - GM_TOP - GM_GAP - 20); }
+function gNewPipe(i, x) { gPipeX[i] = x; gPipeGap[i] = gRandGap(); gScored[i] = false; gPipeCol[i] = GM_COLOURS[random(4)]; }
+function gPipeCols(i, x0, x1, c) {
+  if (x0 < 0) x0 = 0; if (x1 > 128) x1 = 128; if (x1 <= x0) return;
+  const top = gPipeGap[i], bot = top + GM_GAP;
+  tft.fillRect(x0, GM_TOP, x1 - x0, top - GM_TOP, c);
+  tft.fillRect(x0, bot, x1 - x0, GM_BOT - bot, c);
+}
+function gDrawBird() {
+  const y = Math.trunc(gY + 0.5);
+  if (y === gDrawnY) return;
+  if (gDrawnY >= 0) {
+    const dy = y - gDrawnY;
+    if (dy >= GM_BIRD || -dy >= GM_BIRD) tft.fillRect(GM_BIRD_X, gDrawnY, GM_BIRD, GM_BIRD, COL_BG);
+    else if (dy > 0) tft.fillRect(GM_BIRD_X, gDrawnY, GM_BIRD, dy, COL_BG);
+    else tft.fillRect(GM_BIRD_X, y + GM_BIRD, GM_BIRD, -dy, COL_BG);
+  }
+  tft.fillRoundRect(GM_BIRD_X, y, GM_BIRD, GM_BIRD, 2, COL_BUTTER);
+  tft.drawPixel(GM_BIRD_X + 5, y + 2, COL_BG);
+  gDrawnY = y;
+}
+function gDrawScore() { drawRight(122, 19, snprintf(8, "%4d", gScore), COL_FG, 1); }
+function gDrawFooter() { drawFooter(snprintf(24, "best %u - hold: exit", settings.gameBest)); }
+function gReset() {
+  tft.fillRect(0, GM_TOP, 128, GM_BOT - GM_TOP, COL_BG);
+  tft.drawFastHLine(0, GM_BOT, 128, COL_FAINT);
+  gState = G_READY; gScore = 0; gVy = 0; gDrawnY = -1;
+  gY = idiv(GM_TOP + GM_BOT, 2) - idiv(GM_BIRD, 2);
+  for (let i = 0; i < GM_PIPES; i++) gNewPipe(i, 128 + 40 + i * GM_SPACING);
+  gDrawBird(); gDrawScore();
+  drawCentered(112, "tap to fly", COL_SUB, 1);
+  gDrawFooter();
+}
+function gGameOver() {
+  gState = G_OVER; gOverAt = millis();
+  beepPattern(3, 90, 60);
+  const best = gScore > settings.gameBest;
+  if (best) { settings.gameBest = gScore; saveSettings(); }
+  tft.fillRoundRect(14, 60, 100, 42, 8, COL_CARD);
+  const s = snprintf(12, "%d", gScore);
+  drawTextBg(idiv(128 - s.length * 12, 2), 66, s, best && gScore > 0 ? COL_BUTTER : COL_FG, 2, COL_CARD);
+  const line = best && gScore > 0 ? "new best" : "tap to retry";
+  drawTextBg(idiv(128 - line.length * 6, 2), 88, line, best && gScore > 0 ? COL_BUTTER : COL_SUB, 1, COL_CARD);
+  gDrawFooter();
+}
+function gamePress() {
+  if (gState === G_READY) { tft.fillRect(0, 110, 128, 10, COL_BG); gState = G_PLAY; gLastFrame = millis(); gVy = GM_FLAP; }
+  else if (gState === G_PLAY) gVy = GM_FLAP;
+  else if (U(millis() - gOverAt) >= 600) gReset();
+}
+function gameEnter() { drawTitle("Glide", COL_BUTTER); gReset(); }
+function gameHold() { openApp(APP_EXERCISE); }
+function gameUpdate() {
+  const now = millis();
+  if (gState !== G_PLAY || U(now - gLastFrame) < GM_FRAME_MS) return;
+  gLastFrame = now;
+  gVy += GM_GRAVITY; if (gVy > GM_MAX_FALL) gVy = GM_MAX_FALL;
+  gY += gVy;
+  let hit = false;
+  if (gY < GM_TOP) { gY = GM_TOP; gVy = 0; }
+  if (gY + GM_BIRD > GM_BOT) { gY = GM_BOT - GM_BIRD; hit = true; }
+  for (let i = 0; i < GM_PIPES; i++) {
+    const ox = gPipeX[i], nx = ox - GM_SPEED;
+    gPipeCols(i, nx, ox, gPipeCol[i]);
+    gPipeCols(i, nx + GM_PIPE_W, ox + GM_PIPE_W, COL_BG);
+    gPipeX[i] = nx;
+    if (nx < GM_BIRD_X + GM_BIRD && nx + GM_PIPE_W > GM_BIRD_X && (gY < gPipeGap[i] || gY + GM_BIRD > gPipeGap[i] + GM_GAP)) hit = true;
+    if (!gScored[i] && nx + GM_PIPE_W <= GM_BIRD_X) { gScored[i] = true; gScore++; gDrawScore(); beepPattern(1, 15, 10); }
+    if (nx + GM_PIPE_W <= 0) { let far = 0; for (let j = 0; j < GM_PIPES; j++) if (gPipeX[j] > far) far = gPipeX[j]; gNewPipe(i, far + GM_SPACING); }
+  }
+  gDrawBird();
+  if (hit) gGameOver();
+}
+
+// ---------- Boot ----------
+let bootStart = 0, bootLastShown = -1;
+function bootEnter() {
+  bootStart = millis(); bootLastShown = -1;
+  drawTitle("Starting up", COL_SKY);
+  drawCentered(44, "New day", COL_FG, 2);
+  drawCentered(72, "Hold to continue", COL_SUB, 1);
+  drawCentered(84, "the previous day", COL_SUB, 1);
+  drawFooter("tap to start now");
+}
+function checkpointToDay(cp) {
+  pushDay({ seatedMin: Math.floor(cp.seatedMs / 60000), outMin: Math.floor(cp.outMs / 60000), longestMin: Math.floor(cp.longestMs / 60000),
+    reps: cp.reps, remAns: cp.remAns, remTot: cp.remTot, bestTestDs: Math.floor(cp.bestTestMs / 100), slots: cp.slots.slice() });
+}
+function bootNewDay() {
+  const cp = EEPROM.getCheckpoint(CP_ADDR);
+  if (cp.magic === CP_MAGIC) checkpointToDay(cp);
+  clearCheckpoint(); resetToday(); computeBaseline();
+  openApp(APP_GLANCE);
+}
+function bootUpdate() {
+  const el = U(millis() - bootStart);
+  const left = el >= BOOT_CHOICE_MS ? 0 : Math.floor((BOOT_CHOICE_MS - el + 999) / 1000);
+  if (left !== bootLastShown) {
+    bootLastShown = left;
+    tft.fillRect(0, 104, 128, 10, COL_BG);
+    drawCentered(106, snprintf(20, "Starting in %d", left), COL_FAINT, 1);
+  }
+  if (left === 0) bootNewDay();
+}
+function restoreCheckpoint(cp) {
+  resetToday();
+  reps = cp.reps; seatedTotalMs = cp.seatedMs; outTotalMs = cp.outMs; longestSitMs = cp.longestMs;
+  remindersAnswered = cp.remAns; remindersTotal = cp.remTot; todayBestTestMs = cp.bestTestMs;
+  unpackSlots(cp.slots, todaySlots);
+  satToday = cp.seatedMs > 0 || cp.reps > 0;
+  if (!clockOk) { todayOffsetMs = cp.elapsedMs; slotIdx = Math.floor(cp.elapsedMs / SLOT_MS); if (slotIdx > SLOTS - 1) slotIdx = SLOTS - 1; }
+  goalReached = reps >= currentGoal();
+}
+function bootContinue() { restoreCheckpoint(EEPROM.getCheckpoint(CP_ADDR)); openApp(APP_GLANCE); }
+function alwaysBusy() { return true; }
+
+// APP TABLE
+function noUpdate() {} function noTap() {} function notBusy() { return false; }
+const apps = [
+  { enter: glanceEnter,   update: glanceUpdate,   onTap: nextCarousel, onHold: openMenuFromHere, busy: notBusy },
+  { enter: patternEnter,  update: patternUpdate,  onTap: nextCarousel, onHold: openMenuFromHere, busy: notBusy },
+  { enter: weekEnter,     update: weekUpdate,     onTap: nextCarousel, onHold: openMenuFromHere, busy: notBusy },
+  { enter: trendsEnter,   update: noUpdate,       onTap: nextCarousel, onHold: openMenuFromHere, busy: notBusy },
+  { enter: exerciseEnter, update: exerciseUpdate, onTap: nextCarousel, onHold: exerciseHold,     busy: notBusy },
+  { enter: menuEnter,     update: menuUpdate,     onTap: menuTap,      onHold: menuHold,         busy: notBusy },
+  { enter: testRunEnter,  update: testRunUpdate,  onTap: testRunTap,   onHold: testRunHold,      busy: testBusy },
+  { enter: checkEnter,    update: checkUpdate,    onTap: noTap,        onHold: checkHold,        busy: notBusy },
+  { enter: bootEnter,     update: bootUpdate,     onTap: bootNewDay,   onHold: bootContinue,     busy: alwaysBusy },
+  { enter: setClockEnter, update: noUpdate,       onTap: setClockTap,  onHold: setClockHold,     busy: notBusy },
+  { enter: gameEnter,     update: gameUpdate,     onTap: noTap,        onHold: gameHold,         busy: notBusy },
+];
+function openApp(id) {
+  currentApp = id;
+  lastInput = millis();
+  footerSaved = ""; footerDots = false;
+  tft.fillRect(0, 14, 128, 146, COL_BG);
+  drawDivider();
+  drawStatusBar();
+  holdBarPx = 0;
+  apps[id].enter();
+}
+
+// TOUCH
+function unlockScreen() { if (locked) { locked = false; drawStatusBar(); } }
+function showLockedHint() { hintUntil = U(millis() + 1200); tft.fillRect(0, 145, 128, 10, COL_BG); drawCentered(147, "locked: press longer", COL_PEACH, 1); }
+function longHoldMs() { if (currentApp === APP_EXERCISE) return SECRET_HOLD_MS; if (currentApp === APP_SETCLOCK) return LONG_HOLD_MS; return 0; }
+function onLongHold() { if (currentApp === APP_EXERCISE) openApp(APP_GAME); else if (currentApp === APP_SETCLOCK) setClockUndo(); }
+function holdName(longHold) {
+  if (longHold) return currentApp === APP_SETCLOCK ? "-1 (undo)" : "?";
+  switch (currentApp) {
+    case APP_GLANCE: case APP_PATTERN: case APP_WEEK: case APP_TRENDS: return "Menu";
+    case APP_EXERCISE: return "Start test";
+    case APP_MENU: return "select";
+    case APP_TEST_RUN: return testActive() ? "cancel test" : "Exercise";
+    case APP_CHECK: return "back";
+    case APP_BOOT: return "continue day";
+    case APP_GAME: return "exit";
+    case APP_SETCLOCK:
+      if (!rtcFound) return "back";
+      if (scField < SC_ACTION) return "next field";
+      return scAction === SA_SAVE ? "save" : scAction === SA_EDIT ? "edit again" : "cancel";
+    default: return "select";
+  }
+}
+let labelShown = 0;
+function showHoldLabel(state) {
+  if (state === labelShown) return;
+  labelShown = state;
+  if (state === 1) drawFooterText(snprintf(24, "hold: %s", holdName(false)), COL_FAINT);
+  else if (state === 2) drawFooterText(snprintf(24, "release: %s", holdName(false)), COL_SKY);
+  else if (state === 3) drawFooterText(snprintf(24, "release: %s", holdName(true)), COL_BUTTER);
+}
+function clearHoldLabel() { if (labelShown) { labelShown = 0; restoreFooter(); } }
+let longShown = false;
+function serviceTouch() {
+  const now = millis();
+  const touched = digitalRead(TOUCH_PIN) === HIGH;
+  if (touched && !touchDown) {
+    touchDown = true; touchCancelled = false; touchStart = now; longShown = false;
+    if (currentApp === APP_GAME) { lastInput = now; gamePress(); }
+  } else if (touched && touchDown && !touchCancelled) {
+    const held = U(now - touchStart);
+    if (held >= RESTING_MS) { touchCancelled = true; clearHoldBar(); clearHoldLabel(); return; }
+    const lockedHere = locked && currentApp === APP_GLANCE;
+    const barDelay = currentApp === APP_GAME ? GAME_BAR_DELAY_MS : HOLD_BAR_DELAY_MS;
+    if (held >= barDelay) drawHoldBar(held, lockedHere && held < LOCKED_TAP_MS ? COL_FAINT : COL_SKY);
+    const lh = longHoldMs();
+    if (lh && held >= lh && !longShown) { longShown = true; tft.fillRect(4, 157, 120, 2, COL_BUTTER); holdBarPx = 120; }
+    if (held >= HOLD_LABEL_MS && !(lockedHere && held < LOCKED_TAP_MS)) showHoldLabel(longShown ? 3 : held >= HOLD_MS ? 2 : 1);
+  } else if (!touched && touchDown) {
+    touchDown = false;
+    const held = U(now - touchStart);
+    clearHoldBar();
+    clearHoldLabel();
+    if (touchCancelled || held < GLITCH_MS) return;
+    if (held >= HOLD_MS) {
+      lastInput = now; unlockScreen();
+      const lh = longHoldMs();
+      if (lh && held >= lh) onLongHold(); else apps[currentApp].onHold();
+      return;
+    }
+    if (locked && currentApp === APP_GLANCE && held < LOCKED_TAP_MS) { showLockedHint(); return; }
+    lastInput = now; unlockScreen();
+    apps[currentApp].onTap();
+  }
+}
+
+// GROVE LCD
+let lcdShown1 = "", lcdShown2 = "", lcdR = -1, lcdG = -1, lcdB = -1;
+function lcdColor(r, g, b) { if (r !== lcdR || g !== lcdG || b !== lcdB) { lcd.setRGB(r, g, b); lcdR = r; lcdG = g; lcdB = b; } }
+function lcdShow(a, b) {
+  const l1 = snprintf(17, "%-16s", a), l2 = snprintf(17, "%-16s", b);
+  if (l1 !== lcdShown1) { lcd.setCursor(0, 0); lcd.print(l1); lcdShown1 = l1; }
+  if (l2 !== lcdShown2) { lcd.setCursor(0, 1); lcd.print(l2); lcdShown2 = l2; }
+}
+function updateLcd() {
+  const now = millis();
+  const period = U(dataMillis() - stateSince);
+  const t = fmtDur(period, 12);
+  let a, b;
+  if (currentApp === APP_BOOT) { lcdColor(120, 170, 255); lcdShow("NEW DAY", "HOLD: CONTINUE"); return; }
+  if (currentApp === APP_GAME) {
+    lcdColor(185, 160, 255);
+    a = snprintf(17, "GLIDE  SCORE %d", gScore); b = snprintf(17, "BEST %u", settings.gameBest);
+  } else if (testActive()) {
+    lcdColor(185, 160, 255);
+    if (testState === T_RUNNING) { a = snprintf(17, "TEST  STAND %d/5", testStands); b = snprintf(17, "TIME  %s", fmtTenths(U(now - testStart), 12)); }
+    else if (testState === T_COUNTDOWN) { a = snprintf(17, "TEST STARTING"); b = snprintf(17, "GET READY"); }
+    else { a = snprintf(17, "TEST: SIT DOWN"); b = snprintf(17, "TO BEGIN"); }
+  } else if (reminderDue) {
+    lcdColor(255, 125, 115);
+    a = snprintf(17, "TIME TO STAND"); b = snprintf(17, "SEATED %9s", t);
+  } else {
+    const L = LEVELS[activityLevel()];
+    lcdColor(L.r, L.g, L.b);
+    a = snprintf(17, "%s", L.lcdText);
+    b = seated ? snprintf(17, "SEATED %9s", t) : snprintf(17, "OUT %12s", t);
+  }
+  lcdShow(a, b);
+}
+
+// TFT RECOVERY
+const TFT_KEEPALIVE_MS = 3000, TFT_REPAINT_MS = 5 * 60000;
+let lastTftKeepAlive = 0, lastTftRepaint = 0;
+function serviceTft() {
+  const now = millis();
+  if (U(now - lastTftKeepAlive) >= TFT_KEEPALIVE_MS) lastTftKeepAlive = now;   // keep-alive commands: nothing to emulate
+  if (U(now - lastTftRepaint) >= TFT_REPAINT_MS) {
+    lastTftRepaint = now;
+    if (locked && currentApp === APP_GLANCE && !touchDown) openApp(APP_GLANCE);
+  }
+}
+
+// SETUP AND LOOP
+let lastLcdUpdate = 0, lastStatusUpdate = 0;
+function setup() {
+  Serial.begin(115200);
+  seatRaw = readSeatPressed();
+  loadSettings();
+  lcd.begin(16, 2);
+  lcdColor(120, 170, 255);
+  rtcFound = rtc.begin();
+  if (rtcFound) {
+    const id = buildId();
+    if (settings.buildId !== id) {
+      rtc.adjust(DateTime.fromStrings(__DATE__, __TIME__).plus(UPLOAD_SECONDS));
+      settings.buildId = id; saveSettings(); clockOk = true;
+    } else clockOk = !rtc.lostPower();
+    if (clockOk) readClock();
+  }
+  if (!clockOk) Serial.println("Clock not set. Type the time like 2026-11-08 13:45:00");
+  lcdShow("SEAT SENSOR", "STARTING");
+  tft.initR(); tft.setSPISpeed(); tft.setRotation(0);
+  tft.fillScreen(COL_BG);
+  drawCentered(70, "Seat Sensor", COL_SKY, 1);
+  resetToday();
+  computeBaseline();
+  lastInput = millis();
+  rawSinceReal = millis(); rawSinceData = dataMillis();
+  const cp = EEPROM.getCheckpoint(CP_ADDR);
+  if (cp.magic !== CP_MAGIC) openApp(APP_GLANCE);
+  else if (clockOk && cp.date !== 0) {
+    if (cp.date === todayDate) restoreCheckpoint(cp);
+    else { checkpointToDay(cp); clearCheckpoint(); computeBaseline(); }
+    openApp(APP_GLANCE);
+  } else openApp(APP_BOOT);
+}
+function loop() {
+  const now = millis();
+  serviceTouch();
+  serviceSensor();
+  serviceClock();
+  serviceSerialClock();
+  serviceBuzzer();
+  serviceTft();
+  if (U(now - lastLcdUpdate) >= 250) { lastLcdUpdate = now; updateLcd(); }
+  if (U(now - lastStatusUpdate) >= 1000) { lastStatusUpdate = now; drawStatusBar(); }
+  if (hintUntil && now >= hintUntil) { hintUntil = 0; if (carouselIndex(currentApp) >= 0) drawDots(); }
+  apps[currentApp].update();
+  if (!touchDown && !apps[currentApp].busy() && U(millis() - lastInput) >= IDLE_MS) {
+    if (!locked || currentApp !== APP_GLANCE) { locked = true; if (currentApp !== APP_GLANCE) openApp(APP_GLANCE); }
+  }
+}
+
+// Read-only view of the sketch's variables, for the inspector panel
+function debug() {
+  const fd = ms => fmtDur(ms, 24);
+  const cp = EEPROM.getCheckpoint(CP_ADDR);
+  return {
+    "currentApp": APP_NAMES[currentApp] + (currentApp === APP_MENU ? ` (page ${PAGE_TITLES[menuPage]}, row ${menuSel})` : ""),
+    "locked": locked,
+    "idle -> main in": apps[currentApp].busy() ? "busy (never)" : touchDown ? "touching" : fd(Math.max(0, IDLE_MS - U(millis() - lastInput))),
+    "touchDown / held": touchDown ? `yes, ${U(millis() - touchStart)} ms${touchCancelled ? " (cancelled)" : ""}` : "no",
+    "seatRaw / seated": `${seatRaw ? "pressed" : "empty"} / ${seated ? "seated" : "out"}`,
+    "satToday": satToday,
+    "current period": fd(U(dataMillis() - stateSince)),
+    "reps / goal": `${reps} / ${currentGoal()}${goalReached ? " (reached)" : ""}`,
+    "reminderDue": reminderDue + `  (beeped ${remindsThisSit}× this sit; ${remindersAnswered}/${remindersTotal} answered)`,
+    "long-sit interval": REMIND_OPTIONS_S[settings.remindIndex] + " s",
+    "totalSeated / totalOut": `${fd(totalSeatedMs())} / ${fd(totalOutMs())}`,
+    "longest sit": fd(longestSitNowMs()),
+    "activity level": LEVELS[(() => { const s = statusDiffMin; const l = activityLevel(); statusDiffMin = s; return l; })()].label,
+    "slotIdx (8-min block)": `${slotIdx}  (samples ${slotSeatedSamples}/${slotSamples})`,
+    "dayElapsedMs": fd(dayElapsedMs()) + `  (offset ${fd(todayOffsetMs)})`,
+    "timeScale (fast mode)": timeScale + "×",
+    "millis() / dataMillis()": `${millis()} / ${dataMillis()}`,
+    "rtcFound / clockOk": `${rtcFound} / ${clockOk}`,
+    "clockNow": clockNow.toString(),
+    "todayDate": todayDate,
+    "haveBaseline": haveBaseline,
+    "days stored (head)": `${settings.dayCount} (head ${settings.dayHead})`,
+    "tests stored / #": `${settings.testCount} / ${settings.testNumber}`,
+    "testState": ["WAIT_SIT", "COUNTDOWN", "RUNNING", "RESULT"][testState] + (testState === T_RUNNING ? ` (${testStands}/5)` : ""),
+    "game best": settings.gameBest,
+    "checkpoint in EEPROM": cp.magic === CP_MAGIC ? `yes, date ${cp.date}, ${cp.reps} reps, elapsed ${fd(cp.elapsedMs)}` : "none",
+    "EEPROM bytes written": eeWrites,
+  };
+}
+function appName() { return APP_NAMES[currentApp]; }
+return { setup, loop, debug, appName };
+}
+
+// =====================================================================
+// RUNTIME: boot, scheduled inputs, the frame loop
+// =====================================================================
+let currentSketch = null;
+function boot() {
+  bootAbs = simAbs;
+  millisStart = document.getElementById("nearWrap").checked ? (2 ** 32 - 120000) : 0;
+  buzzerHigh = false; audioSet(false);
+  lcd.begin(); lcd.rgb = [0, 0, 0];
+  tft.fillScreen(0x0000);
+  currentSketch = createSketch();
+  Serial.println(`--- power on (millis starts at ${millisStart}) ---`);
+  currentSketch.setup();
+}
+const events = [];        // { at: simAbs, fn }
+function schedule(delay, fn) { events.push({ at: simAbs + delay, fn }); events.sort((a, b) => a.at - b.at); }
+function applyEvents() { while (events.length && events[0].at <= simAbs) events.shift().fn(); }
+function advance(ms) { simAbs += ms; applyEvents(); currentSketch.loop(); }
+
+let speed = 1, paused = false, jumpLeft = 0, jumpTotal = 0, carry = 0, lastFrame = performance.now();
+function frame(t) {
+  const realDt = Math.min(1000, t - lastFrame);    // slow frames still advance the full real time
+  lastFrame = t;
+  if (jumpLeft > 0) {
+    const t0 = performance.now();
+    let n = 0;
+    while (jumpLeft > 0) {
+      const d = Math.min(20, jumpLeft);
+      advance(d); jumpLeft -= d;
+      if (++n % 200 === 0 && performance.now() - t0 > 40) break;
+    }
+    document.getElementById("jumpInfo").textContent = jumpLeft > 0 ? `skipping… ${Math.round(100 - jumpLeft / jumpTotal * 100)}%` : "";
+  } else if (!paused) {
+    carry += realDt * speed;
+    const step = speed <= 5 ? 1 : speed <= 60 ? 2 : 5;
+    while (carry >= step) { advance(step); carry -= step; }
+  }
+  render();
+  requestAnimationFrame(frame);
+}
+
+// =====================================================================
+// RENDERING
+// =====================================================================
+const canvas = document.getElementById("tft");
+const ctx = canvas.getContext("2d");
+const img = ctx.createImageData(TW, TH);
+const rgbOf = c => [((c >> 11) & 31) * 255 / 31 | 0, ((c >> 5) & 63) * 255 / 63 | 0, (c & 31) * 255 / 31 | 0];
+let lastInspector = 0;
+function render() {
+  const flashOn = document.getElementById("flash").checked, now = performance.now();
+  if (fbDirty || flashOn) {
+    const d = img.data;
+    for (let i = 0; i < TW * TH; i++) {
+      let [r, g, b] = rgbOf(fb[i]);
+      if (flashOn) { const age = now - drawnAt[i]; if (age < 350) { const k = 1 - age / 350; r = r + (255 - r) * k * 0.8; g = g * (1 - k * 0.8); b = b + (255 - b) * k * 0.8; } }
+      d[i * 4] = r; d[i * 4 + 1] = g; d[i * 4 + 2] = b; d[i * 4 + 3] = 255;
+    }
+    ctx.putImageData(img, 0, 0);
+    fbDirty = false;
+  }
+  const lcdEl = document.getElementById("lcd");
+  lcdEl.textContent = lcd.rows.join("\n");
+  lcdEl.style.background = `rgb(${lcd.rgb.join(",")})`;
+  document.getElementById("buzz").classList.toggle("on", buzzerHigh);
+  document.getElementById("seatPill").textContent = input.seat ? "pressed" : "empty";
+  document.getElementById("seatToggle").innerHTML = (input.seat ? "Stand up (empty)" : "Sit down") + " <kbd>S</kbd>";
+  document.getElementById("touchpad").classList.toggle("down", input.touch);
+  if (serialDirty) { const el = document.getElementById("serialOut"); el.textContent = serialText; el.scrollTop = el.scrollHeight; serialDirty = false; }
+  if (now - lastInspector > 120) {
+    lastInspector = now;
+    const st = currentSketch.debug();
+    document.getElementById("appPill").textContent = st.currentApp.split(" ")[0];
+    document.getElementById("inspector").innerHTML = Object.entries(st).map(([k, v]) => `<tr><td>${k}</td><td>${String(v).replace(/</g, "&lt;")}</td></tr>`).join("");
+  }
+}
+function renderWarnings() {
+  document.getElementById("warnings").innerHTML = [...warnings.keys()].map(w => `<div>${w.replace(/</g, "&lt;")}</div>`).join("") || '<span class="hint">none yet</span>';
+}
+canvas.addEventListener("mousemove", e => {
+  const r = canvas.getBoundingClientRect();
+  const x = Math.floor((e.clientX - r.left) / r.width * TW), y = Math.floor((e.clientY - r.top) / r.height * TH);
+  if (x < 0 || y < 0 || x >= TW || y >= TH) return;
+  document.getElementById("coords").textContent = `x ${x}, y ${y}   colour 0x${fb[y * TW + x].toString(16).toUpperCase().padStart(4, "0")}`;
+});
+
+// =====================================================================
+// BUZZER SOUND
+// =====================================================================
+let actx = null, osc = null, gain = null;
+function audioSet(on) {
+  if (!actx || !document.getElementById("sound").checked) { if (gain) gain.gain.value = 0; return; }
+  gain.gain.setTargetAtTime(on ? 0.05 : 0, actx.currentTime, 0.002);
+}
+function audioInit() {
+  if (actx) return;
+  try {
+    actx = new AudioContext(); osc = actx.createOscillator(); gain = actx.createGain();
+    osc.type = "square"; osc.frequency.value = 2700; gain.gain.value = 0;
+    osc.connect(gain).connect(actx.destination); osc.start();
+  } catch (e) { actx = null; }
+}
+
+// =====================================================================
+// CONTROLS
+// =====================================================================
+const $ = id => document.getElementById(id);
+function touchFor(ms) { input.touch = true; schedule(ms, () => { input.touch = false; }); }
+document.querySelectorAll("[data-touch]").forEach(b => b.addEventListener("click", () => touchFor(+b.dataset.touch)));
+const pad = $("touchpad");
+pad.addEventListener("pointerdown", e => { audioInit(); pad.setPointerCapture(e.pointerId); input.touch = true; });
+pad.addEventListener("pointerup", () => { input.touch = false; });
+pad.addEventListener("pointercancel", () => { input.touch = false; });
+
+$("seatToggle").addEventListener("click", () => { input.seat = !input.seat; });
+function seatScript(kind) {
+  if (kind === "standup") { input.seat = false; schedule(3000, () => { input.seat = true; }); }
+  else if (kind === "bounce") { const was = input.seat; input.seat = !was; schedule(250, () => { input.seat = was; }); }
+  else if (kind === "shift") { input.seat = true; schedule(300, () => { input.seat = false; }); }
+  else if (kind === "reps5" || kind === "reps5fast") {
+    const up = kind === "reps5" ? 800 : 450, down = kind === "reps5" ? 700 : 450;
+    input.seat = true;
+    let t = 0;
+    for (let i = 0; i < 5; i++) { schedule(t, () => { input.seat = false; }); t += up; schedule(t, () => { input.seat = true; }); t += down; }
+  } else if (kind === "longsit") { input.seat = true; schedule(1000, () => { jumpLeft = jumpTotal = 31 * 60000; }); }
+}
+document.querySelectorAll("[data-seat]").forEach(b => b.addEventListener("click", () => seatScript(b.dataset.seat)));
+
+$("speed").addEventListener("change", e => { speed = +e.target.value; });
+$("pauseBtn").addEventListener("click", () => { paused = !paused; $("pauseBtn").textContent = paused ? "Run" : "Pause"; $("pauseBtn").classList.toggle("on", paused); });
+$("stepBtn").addEventListener("click", () => { for (let i = 0; i < 20; i++) advance(1); });
+document.querySelectorAll("[data-jump]").forEach(b => b.addEventListener("click", () => { jumpLeft += +b.dataset.jump; jumpTotal = jumpLeft; }));
+$("sound").addEventListener("change", e => { if (e.target.checked) audioInit(); audioSet(buzzerHigh); });
+
+$("powerCycle").addEventListener("click", () => { events.length = 0; input.touch = false; rtcHw.powerLoss(); boot(); });
+$("reupload").addEventListener("click", () => { events.length = 0; input.touch = false; setCompileTimeToNow(); Serial.println(`--- uploaded, compiled ${compileDate} ${compileTime} ---`); boot(); });
+$("wipe").addEventListener("click", () => { if (confirm("Wipe all 8 KB of EEPROM back to 0xFF? Days, tests and settings are lost; the sketch restarts.")) { EE.fill(0xFF); events.length = 0; boot(); } });
+$("coinCell").addEventListener("change", e => { rtcHw.coinCell = e.target.checked; });
+$("rtcPresent").addEventListener("change", e => { rtcHw.present = e.target.checked; if (e.target.checked) rtcHw.powerLoss(); });
+
+function sendSerial() { const v = $("serialIn").value; for (const c of v + "\n") serialIn.push(c); Serial.print("> " + v + "\n"); $("serialIn").value = ""; }
+$("serialSend").addEventListener("click", sendSerial);
+$("serialIn").addEventListener("keydown", e => { if (e.key === "Enter") sendSerial(); e.stopPropagation(); });
+$("serialNow").addEventListener("click", () => { const t = new Date(); $("serialIn").value = `${t.getFullYear()}-${pad2(t.getMonth() + 1)}-${pad2(t.getDate())} ${pad2(t.getHours())}:${pad2(t.getMinutes())}:${pad2(t.getSeconds())}`; });
+$("serialClear").addEventListener("click", () => { serialText = ""; serialDirty = true; });
+$("clearWarn").addEventListener("click", () => { warnings.clear(); renderWarnings(); });
+
+document.addEventListener("keydown", e => {
+  if (e.target.tagName === "INPUT" || e.target.tagName === "SELECT") return;
+  if (e.code === "Space") { e.preventDefault(); if (!e.repeat) { audioInit(); input.touch = true; } }
+  else if (e.key === "s" || e.key === "S") input.seat = !input.seat;
+  else if (e.key === "t" || e.key === "T") touchFor(250);
+  else if (e.key === "h" || e.key === "H") touchFor(900);
+});
+document.addEventListener("keyup", e => { if (e.code === "Space") input.touch = false; });
+
+// First start: a fresh upload onto a board whose DS3231 has no coin cell
+setCompileTimeToNow();
+renderWarnings();
+boot();
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
